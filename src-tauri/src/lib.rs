@@ -189,15 +189,20 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
 
-                // Apply window vibrancy for transparency with rounded corners
+                // Apply window vibrancy for maximum transparency with rounded corners
                 #[cfg(target_os = "macos")]
                 {
-                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
                     use cocoa::base::{id, YES};
                     use objc::{msg_send, sel, sel_impl};
 
-                    // Apply vibrancy first - Menu material is very transparent
-                    let _ = apply_vibrancy(&window, NSVisualEffectMaterial::Menu, None, None);
+                    // Apply vibrancy with Popover for light blur and high transparency
+                    let _ = apply_vibrancy(
+                        &window,
+                        NSVisualEffectMaterial::Popover,
+                        Some(NSVisualEffectState::Active),
+                        None
+                    );
 
                     // Then apply rounded corners to the content view
                     let ns_window = window.ns_window().unwrap() as id;

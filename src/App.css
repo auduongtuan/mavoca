@@ -20,10 +20,15 @@
   box-sizing: border-box;
 }
 
-body {
+html, body {
   height: 100vh;
   overflow: hidden;
-  background: transparent;
+  background: transparent !important;
+}
+
+#root {
+  height: 100vh;
+  background: transparent !important;
 }
 
 .app {
@@ -65,16 +70,18 @@ body {
 }
 
 .category {
-  background: rgba(0, 0, 0, 0.1);
-  color: #787774;
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.9);
   padding: 3px 8px;
-  border-radius: 3px;
+  border-radius: 4px;
   font-size: 10px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.25);
   white-space: nowrap;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .meaning {
@@ -89,10 +96,12 @@ body {
 }
 
 .example {
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.12);
   padding: 12px;
-  border-radius: 4px;
-  border-left: 2px solid rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .example h3 {
@@ -121,34 +130,38 @@ body {
 .control-btn {
   flex: 1;
   padding: 7px 10px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s ease;
-  background: #ffffff;
+  transition: all 0.2s ease;
+  background: rgba(255, 255, 255, 0.15);
   color: #37352f;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .control-btn:hover {
-  background: #f7f6f3;
-  border-color: rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.35);
+  transform: translateY(-1px);
 }
 
 .control-btn:active {
-  background: #ebeae8;
+  background: rgba(255, 255, 255, 0.3);
+  transform: translateY(0);
 }
 
 .random-btn {
-  background: #37352f;
+  background: rgba(55, 53, 47, 0.7);
   color: #ffffff;
-  border-color: #37352f;
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 .random-btn:hover {
-  background: #2f2d29;
-  border-color: #2f2d29;
+  background: rgba(55, 53, 47, 0.85);
+  border-color: rgba(255, 255, 255, 0.4);
 }
 
 /* Loading State */
@@ -252,9 +265,9 @@ body {
   }
 
   .category {
-    background: rgba(255, 255, 255, 0.15);
-    color: #9b9a97;
-    border: none;
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.2);
   }
 
   .meaning p {
@@ -262,8 +275,8 @@ body {
   }
 
   .example {
-    background: rgba(255, 255, 255, 0.1);
-    border-left: 2px solid rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
   }
 
   .example h3 {
@@ -275,29 +288,29 @@ body {
   }
 
   .control-btn {
-    background: #2f2e2c;
+    background: rgba(255, 255, 255, 0.1);
     color: #e3e2e0;
-    border-color: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.2);
   }
 
   .control-btn:hover {
-    background: #3f3e3b;
-    border-color: rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.3);
   }
 
   .control-btn:active {
-    background: #4a4946;
+    background: rgba(255, 255, 255, 0.2);
   }
 
   .random-btn {
-    background: #e3e2e0;
-    color: #2f2e2c;
-    border-color: #e3e2e0;
+    background: rgba(227, 226, 224, 0.25);
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.35);
   }
 
   .random-btn:hover {
-    background: #d3d2ce;
-    border-color: #d3d2ce;
+    background: rgba(227, 226, 224, 0.35);
+    border-color: rgba(255, 255, 255, 0.45);
   }
 
   .loading-state,
