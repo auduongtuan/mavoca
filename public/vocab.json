@@ -1,0 +1,62 @@
+[
+  {
+    "word": "serendipity",
+    "meaning": "The occurrence and development of events by chance in a happy or beneficial way",
+    "example": "Meeting my best friend at the coffee shop was pure serendipity.",
+    "category": "noun"
+  },
+  {
+    "word": "ephemeral",
+    "meaning": "Lasting for a very short time",
+    "example": "The beauty of cherry blossoms is ephemeral, lasting only a few weeks.",
+    "category": "adjective"
+  },
+  {
+    "word": "ubiquitous",
+    "meaning": "Present, appearing, or found everywhere",
+    "example": "Smartphones have become ubiquitous in modern society.",
+    "category": "adjective"
+  },
+  {
+    "word": "ameliorate",
+    "meaning": "To make something better or improve it",
+    "example": "The new policies helped ameliorate working conditions for employees.",
+    "category": "verb"
+  },
+  {
+    "word": "perspicacious",
+    "meaning": "Having a ready insight into and understanding of things",
+    "example": "Her perspicacious analysis of the market trends impressed everyone.",
+    "category": "adjective"
+  },
+  {
+    "word": "quintessential",
+    "meaning": "Representing the most perfect example of a quality or class",
+    "example": "Paris is the quintessential romantic city.",
+    "category": "adjective"
+  },
+  {
+    "word": "enigmatic",
+    "meaning": "Difficult to interpret or understand; mysterious",
+    "example": "The Mona Lisa's enigmatic smile has puzzled viewers for centuries.",
+    "category": "adjective"
+  },
+  {
+    "word": "panacea",
+    "meaning": "A solution or remedy for all difficulties or diseases",
+    "example": "Technology is not a panacea for all educational problems.",
+    "category": "noun"
+  },
+  {
+    "word": "mellifluous",
+    "meaning": "Sweet or musical; pleasant to hear",
+    "example": "The singer's mellifluous voice captivated the entire audience.",
+    "category": "adjective"
+  },
+  {
+    "word": "obfuscate",
+    "meaning": "To render obscure, unclear, or unintelligible",
+    "example": "The politician tried to obfuscate the real issue with confusing rhetoric.",
+    "category": "verb"
+  }
+]

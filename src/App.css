@@ -1,0 +1,334 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color: #37352f;
+  background-color: #ffffff;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  background: transparent;
+}
+
+/* Vocab Card - Using Native Vibrancy (No Extra Styling) */
+.vocab-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: transparent;
+  border-radius: 12px;
+  padding: 20px 18px;
+  gap: 16px;
+  border: none;
+  box-shadow: none;
+}
+
+.word-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding-bottom: 12px;
+  gap: 10px;
+}
+
+.word {
+  font-size: 22px;
+  font-weight: 700;
+  color: #37352f;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.category {
+  background: rgba(0, 0, 0, 0.1);
+  color: #787774;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: none;
+  white-space: nowrap;
+}
+
+.meaning {
+  flex: 1;
+  padding: 0;
+}
+
+.meaning p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #37352f;
+}
+
+.example {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 12px;
+  border-radius: 4px;
+  border-left: 2px solid rgba(0, 0, 0, 0.3);
+}
+
+.example h3 {
+  font-size: 10px;
+  font-weight: 600;
+  color: #787774;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.example-text {
+  font-style: italic;
+  color: #37352f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.controls {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.control-btn {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: #ffffff;
+  color: #37352f;
+}
+
+.control-btn:hover {
+  background: #f7f6f3;
+  border-color: rgba(0, 0, 0, 0.18);
+}
+
+.control-btn:active {
+  background: #ebeae8;
+}
+
+.random-btn {
+  background: #37352f;
+  color: #ffffff;
+  border-color: #37352f;
+}
+
+.random-btn:hover {
+  background: #2f2d29;
+  border-color: #2f2d29;
+}
+
+/* Loading State */
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 16px;
+  color: #37352f;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 12px;
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.04),
+    0 8px 16px rgba(0, 0, 0, 0.12),
+    0 20px 40px rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(55, 53, 47, 0.15);
+  border-top: 3px solid #37352f;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Error State */
+.error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 16px;
+  color: #37352f;
+  text-align: center;
+  padding: 32px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 12px;
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.04),
+    0 8px 16px rgba(0, 0, 0, 0.12),
+    0 20px 40px rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.error-message {
+  background: #f7f6f3;
+  padding: 12px 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.retry-btn {
+  padding: 8px 16px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  background: #ffffff;
+  color: #37352f;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.retry-btn:hover {
+  background: #f7f6f3;
+  border-color: rgba(0, 0, 0, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #e3e2e0;
+    background-color: #2f2e2c;
+  }
+
+  .vocab-card {
+    background: transparent;
+    color: #e3e2e0;
+    border: none;
+    box-shadow: none;
+  }
+
+  .word {
+    color: #e3e2e0;
+  }
+
+  .word-header {
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .category {
+    background: rgba(255, 255, 255, 0.15);
+    color: #9b9a97;
+    border: none;
+  }
+
+  .meaning p {
+    color: #e3e2e0;
+  }
+
+  .example {
+    background: rgba(255, 255, 255, 0.1);
+    border-left: 2px solid rgba(255, 255, 255, 0.3);
+  }
+
+  .example h3 {
+    color: #9b9a97;
+  }
+
+  .example-text {
+    color: #e3e2e0;
+  }
+
+  .control-btn {
+    background: #2f2e2c;
+    color: #e3e2e0;
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .control-btn:hover {
+    background: #3f3e3b;
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .control-btn:active {
+    background: #4a4946;
+  }
+
+  .random-btn {
+    background: #e3e2e0;
+    color: #2f2e2c;
+    border-color: #e3e2e0;
+  }
+
+  .random-btn:hover {
+    background: #d3d2ce;
+    border-color: #d3d2ce;
+  }
+
+  .loading-state,
+  .error-state {
+    background: rgba(47, 46, 44, 0.85);
+    color: #e3e2e0;
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 8px 16px rgba(0, 0, 0, 0.3),
+      0 20px 40px rgba(0, 0, 0, 0.2);
+  }
+
+  .loading-spinner {
+    border-color: rgba(227, 226, 224, 0.15);
+    border-top-color: #e3e2e0;
+  }
+
+  .error-message {
+    background: #3f3e3b;
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .retry-btn {
+    background: #2f2e2c;
+    color: #e3e2e0;
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .retry-btn:hover {
+    background: #3f3e3b;
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+}
