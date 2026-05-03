@@ -6,13 +6,15 @@ interface VocabCardProps {
   onNext: () => void;
   onPrevious: () => void;
   onRandom: () => void;
+  onManage: () => void;
 }
 
 export const VocabCard: React.FC<VocabCardProps> = ({ 
   word, 
   onNext, 
   onPrevious, 
-  onRandom 
+  onRandom,
+  onManage
 }) => {
   return (
     <div className="vocab-card">
@@ -41,6 +43,10 @@ export const VocabCard: React.FC<VocabCardProps> = ({
           Next →
         </button>
       </div>
+
+      <button onClick={onManage} className="manage-btn">
+        Manage vocabulary
+      </button>
     </div>
   );
 };

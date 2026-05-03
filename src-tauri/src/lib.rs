@@ -1,13 +1,35 @@
-use tauri::{
-    menu::Menu,
-    Manager, Runtime, Emitter,
-};
+use reqwest::blocking::Client;
+use rusqlite::{params, Connection, OptionalExtension};
+use scraper::{Html, Selector};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
+use std::{env, fs};
+use tauri::{menu::Menu, Emitter, Manager, Runtime};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct VocabWord {
+    id: i64,
+    word: String,
+    meaning: String,
+    example: String,
+    category: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SeedVocabWord {
+    word: String,
+    meaning: String,
+    example: String,
+    category: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VocabInput {
     word: String,
     meaning: String,
     example: String,
@@ -16,33 +38,344 @@ struct VocabWord {
 
 #[derive(Clone)]
 struct AppState {
+    db: Arc<Mutex<Connection>>,
     vocab_list: Arc<Mutex<Vec<VocabWord>>>,
     current_index: Arc<Mutex<usize>>,
     is_window_visible: Arc<Mutex<bool>>,
 }
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-fn load_vocab_from_json() -> Vec<VocabWord> {
+fn load_seed_vocab() -> Vec<SeedVocabWord> {
     let vocab_json = include_str!("../../public/vocab.json");
     serde_json::from_str(vocab_json).unwrap_or_else(|_| vec![])
 }
 
+fn normalize_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn validate_input(input: &VocabInput) -> Result<VocabInput, String> {
+    let cleaned = VocabInput {
+        word: normalize_text(&input.word),
+        meaning: normalize_text(&input.meaning),
+        example: normalize_text(&input.example),
+        category: normalize_text(&input.category),
+    };
+
+    if cleaned.word.is_empty() {
+        return Err("Word is required".into());
+    }
+    if cleaned.meaning.is_empty() {
+        return Err("Meaning is required".into());
+    }
+    if cleaned.example.is_empty() {
+        return Err("Example is required".into());
+    }
+    if cleaned.category.is_empty() {
+        return Err("Category is required".into());
+    }
+
+    Ok(cleaned)
+}
+
+fn init_database(app: &tauri::AppHandle) -> Result<Connection, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("Failed to locate app data directory: {err}"))?;
+    fs::create_dir_all(&app_data_dir)
+        .map_err(|err| format!("Failed to create app data directory: {err}"))?;
+
+    let db_path = app_data_dir.join("vocab.sqlite3");
+    let conn =
+        Connection::open(db_path).map_err(|err| format!("Failed to open database: {err}"))?;
+
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS vocabs (
+            id INTEGER PRIMARY KEY,
+            word TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            meaning TEXT NOT NULL,
+            example TEXT NOT NULL,
+            category TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        "#,
+    )
+    .map_err(|err| format!("Failed to initialize database: {err}"))?;
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM vocabs", [], |row| row.get(0))
+        .map_err(|err| format!("Failed to inspect database: {err}"))?;
+
+    if count == 0 {
+        for seed in load_seed_vocab() {
+            conn.execute(
+                r#"
+                INSERT OR IGNORE INTO vocabs (word, meaning, example, category)
+                VALUES (?1, ?2, ?3, ?4)
+                "#,
+                params![seed.word, seed.meaning, seed.example, seed.category],
+            )
+            .map_err(|err| format!("Failed to seed vocabulary: {err}"))?;
+        }
+    }
+
+    Ok(conn)
+}
+
+fn dropbox_backup_path() -> Option<PathBuf> {
+    let home = env::var_os("HOME")?;
+    let dropbox_dir = Path::new(&home).join("Dropbox");
+    if !dropbox_dir.exists() {
+        return None;
+    }
+
+    Some(dropbox_dir.join("Vocab Learning").join("vocab.sqlite3"))
+}
+
+fn sync_database_backup(conn: &Connection) -> Result<(), String> {
+    let Some(backup_path) = dropbox_backup_path() else {
+        return Ok(());
+    };
+
+    let backup_dir = backup_path
+        .parent()
+        .ok_or_else(|| "Invalid Dropbox backup path".to_string())?;
+    fs::create_dir_all(backup_dir)
+        .map_err(|err| format!("Failed to create Dropbox backup directory: {err}"))?;
+
+    let temp_path = backup_path.with_extension("sqlite3.tmp");
+    if temp_path.exists() {
+        fs::remove_file(&temp_path)
+            .map_err(|err| format!("Failed to remove stale Dropbox backup: {err}"))?;
+    }
+
+    let temp_path_str = temp_path
+        .to_str()
+        .ok_or_else(|| "Dropbox backup path is not valid UTF-8".to_string())?;
+    conn.execute("VACUUM main INTO ?1", params![temp_path_str])
+        .map_err(|err| format!("Failed to create SQLite Dropbox backup: {err}"))?;
+
+    fs::rename(&temp_path, &backup_path)
+        .map_err(|err| format!("Failed to replace Dropbox backup: {err}"))?;
+
+    Ok(())
+}
+
+fn row_to_vocab(row: &rusqlite::Row<'_>) -> rusqlite::Result<VocabWord> {
+    Ok(VocabWord {
+        id: row.get(0)?,
+        word: row.get(1)?,
+        meaning: row.get(2)?,
+        example: row.get(3)?,
+        category: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id, word, meaning, example, category, created_at, updated_at
+            FROM vocabs
+            ORDER BY lower(word) ASC
+            "#,
+        )
+        .map_err(|err| format!("Failed to prepare vocabulary query: {err}"))?;
+
+    let rows = stmt
+        .query_map([], row_to_vocab)
+        .map_err(|err| format!("Failed to read vocabulary: {err}"))?;
+
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|err| format!("Failed to decode vocabulary: {err}"))
+}
+
+fn get_vocab_by_id(conn: &Connection, id: i64) -> Result<Option<VocabWord>, String> {
+    conn.query_row(
+        r#"
+        SELECT id, word, meaning, example, category, created_at, updated_at
+        FROM vocabs
+        WHERE id = ?1
+        "#,
+        params![id],
+        row_to_vocab,
+    )
+    .optional()
+    .map_err(|err| format!("Failed to read vocabulary word: {err}"))
+}
+
+fn get_vocab_by_word(conn: &Connection, word: &str) -> Result<Option<VocabWord>, String> {
+    conn.query_row(
+        r#"
+        SELECT id, word, meaning, example, category, created_at, updated_at
+        FROM vocabs
+        WHERE word = ?1 COLLATE NOCASE
+        "#,
+        params![word],
+        row_to_vocab,
+    )
+    .optional()
+    .map_err(|err| format!("Failed to read vocabulary word: {err}"))
+}
+
+fn refresh_vocab_cache(state: &AppState) -> Result<Vec<VocabWord>, String> {
+    let list = {
+        let conn = state.db.lock().unwrap();
+        list_vocab_from_db(&conn)?
+    };
+
+    let previous_current_id = {
+        let vocab_list = state.vocab_list.lock().unwrap();
+        let current_index = *state.current_index.lock().unwrap();
+        vocab_list.get(current_index).map(|word| word.id)
+    };
+
+    let next_index = previous_current_id
+        .and_then(|id| list.iter().position(|word| word.id == id))
+        .unwrap_or(0);
+
+    *state.vocab_list.lock().unwrap() = list.clone();
+    *state.current_index.lock().unwrap() = next_index;
+
+    Ok(list)
+}
+
+fn sync_backup_from_state(state: &AppState) -> Result<(), String> {
+    let conn = state.db.lock().unwrap();
+    sync_database_backup(&conn)
+}
+
+fn current_word(state: &AppState) -> Option<VocabWord> {
+    let vocab_list = state.vocab_list.lock().unwrap();
+    let index = *state.current_index.lock().unwrap();
+    vocab_list.get(index).cloned()
+}
+
+fn sync_after_vocab_change(
+    app: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<Vec<VocabWord>, String> {
+    let list = refresh_vocab_cache(state)?;
+
+    if let Some(word) = current_word(state) {
+        update_tray_title(app, &word.word);
+        let _ = app.emit("vocab-changed", word);
+    } else {
+        update_tray_title(app, "");
+        let _ = app.emit("vocab-empty", ());
+    }
+
+    let _ = app.emit("vocab-list-changed", list.clone());
+    sync_backup_from_state(state)?;
+    Ok(list)
+}
+
 fn update_tray_title(app: &tauri::AppHandle, word: &str) {
     if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_title(Some(word));
+        let title = if word.is_empty() { None } else { Some(word) };
+        let _ = tray.set_title(title);
     }
+}
+
+fn selector(query: &str) -> Result<Selector, String> {
+    Selector::parse(query).map_err(|_| format!("Invalid selector: {query}"))
+}
+
+fn first_text_in(
+    element: scraper::ElementRef<'_>,
+    selector_query: &str,
+) -> Result<Option<String>, String> {
+    let selector = selector(selector_query)?;
+    Ok(element
+        .select(&selector)
+        .next()
+        .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
+        .filter(|text| !text.is_empty()))
+}
+
+fn lookup_cambridge_word(word: &str) -> Result<VocabInput, String> {
+    let clean_word = normalize_text(word);
+    if clean_word.is_empty() {
+        return Err("Enter a word to look up".into());
+    }
+
+    let lookup_path = clean_word.to_lowercase().replace(' ', "-");
+    let encoded_word = urlencoding::encode(&lookup_path);
+    let url = format!("https://dictionary.cambridge.org/us/dictionary/english/{encoded_word}");
+    let client = Client::builder()
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) VocabLearning/0.1")
+        .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|err| format!("Failed to create dictionary client: {err}"))?;
+
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|err| format!("Failed to reach Cambridge Dictionary: {err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Cambridge Dictionary returned HTTP {}",
+            response.status()
+        ));
+    }
+
+    let html = response
+        .text()
+        .map_err(|err| format!("Failed to read Cambridge response: {err}"))?;
+    let document = Html::parse_document(&html);
+    let entry_selector = selector(".entry-body__el, .pr.entry-body__el")?;
+    let headword_selector = selector(".hw.dhw")?;
+    let requested = clean_word.to_lowercase();
+
+    for entry in document.select(&entry_selector) {
+        let headword = entry
+            .select(&headword_selector)
+            .next()
+            .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
+            .unwrap_or_default();
+
+        if headword.to_lowercase() != requested {
+            continue;
+        }
+
+        let definition = first_text_in(entry, ".def.ddef_d.db")?
+            .or_else(|| first_text_in(entry, ".def").ok().flatten());
+        let Some(meaning) = definition else {
+            continue;
+        };
+
+        let category = first_text_in(entry, ".pos.dpos")?
+            .or_else(|| first_text_in(entry, ".pos").ok().flatten())
+            .unwrap_or_else(|| "unknown".into());
+        let example = first_text_in(entry, ".examp.dexamp")?
+            .or_else(|| first_text_in(entry, ".eg.deg").ok().flatten())
+            .or_else(|| first_text_in(entry, ".examp").ok().flatten())
+            .unwrap_or_else(|| format!("No example found for {clean_word}."));
+
+        return Ok(VocabInput {
+            word: clean_word,
+            meaning,
+            example,
+            category,
+        });
+    }
+
+    Err(format!("No Cambridge definition found for '{clean_word}'"))
+}
+
+#[tauri::command]
+fn list_vocab_words(state: tauri::State<AppState>) -> Result<Vec<VocabWord>, String> {
+    refresh_vocab_cache(&state)
 }
 
 #[tauri::command]
 fn get_current_vocab_word(state: tauri::State<AppState>) -> Option<VocabWord> {
-    let vocab_list = state.vocab_list.lock().unwrap();
-    let index = *state.current_index.lock().unwrap();
-    vocab_list.get(index).cloned()
+    current_word(&state)
 }
 
 #[tauri::command]
@@ -50,64 +383,176 @@ fn update_current_word_index(
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
     index: usize,
-) {
+) -> Result<(), String> {
     let vocab_list = state.vocab_list.lock().unwrap();
-    if index < vocab_list.len() {
-        *state.current_index.lock().unwrap() = index;
-        if let Some(word) = vocab_list.get(index) {
-            update_tray_title(&app, &word.word);
-        }
+    if index >= vocab_list.len() {
+        return Err("Vocabulary index is out of range".into());
     }
+
+    *state.current_index.lock().unwrap() = index;
+    if let Some(word) = vocab_list.get(index) {
+        update_tray_title(&app, &word.word);
+        let _ = app.emit("vocab-changed", word.clone());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn set_current_vocab_id(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    id: i64,
+) -> Result<(), String> {
+    let vocab_list = state.vocab_list.lock().unwrap();
+    let Some(index) = vocab_list.iter().position(|word| word.id == id) else {
+        return Err("Vocabulary word was not found".into());
+    };
+
+    *state.current_index.lock().unwrap() = index;
+    if let Some(word) = vocab_list.get(index) {
+        update_tray_title(&app, &word.word);
+        let _ = app.emit("vocab-changed", word.clone());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn lookup_vocab_word(word: String) -> Result<VocabInput, String> {
+    lookup_cambridge_word(&word)
+}
+
+#[tauri::command]
+fn create_vocab(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    input: VocabInput,
+) -> Result<VocabWord, String> {
+    let cleaned = validate_input(&input)?;
+    let word = {
+        let conn = state.db.lock().unwrap();
+        if let Some(existing) = get_vocab_by_word(&conn, &cleaned.word)? {
+            conn.execute(
+                r#"
+                UPDATE vocabs
+                SET meaning = ?1, example = ?2, category = ?3, updated_at = datetime('now')
+                WHERE id = ?4
+                "#,
+                params![
+                    cleaned.meaning,
+                    cleaned.example,
+                    cleaned.category,
+                    existing.id
+                ],
+            )
+            .map_err(|err| format!("Failed to update existing vocabulary: {err}"))?;
+            get_vocab_by_id(&conn, existing.id)?
+                .ok_or_else(|| "Updated word was not found".to_string())?
+        } else {
+            conn.execute(
+                r#"
+                INSERT INTO vocabs (word, meaning, example, category)
+                VALUES (?1, ?2, ?3, ?4)
+                "#,
+                params![
+                    cleaned.word,
+                    cleaned.meaning,
+                    cleaned.example,
+                    cleaned.category
+                ],
+            )
+            .map_err(|err| format!("Failed to create vocabulary: {err}"))?;
+            let id = conn.last_insert_rowid();
+            get_vocab_by_id(&conn, id)?.ok_or_else(|| "Created word was not found".to_string())?
+        }
+    };
+
+    sync_after_vocab_change(&app, &state)?;
+    Ok(word)
+}
+
+#[tauri::command]
+fn add_vocab_from_cambridge(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    word: String,
+) -> Result<VocabWord, String> {
+    let input = lookup_cambridge_word(&word)?;
+    create_vocab(state, app, input)
+}
+
+#[tauri::command]
+fn update_vocab(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    id: i64,
+    input: VocabInput,
+) -> Result<VocabWord, String> {
+    let cleaned = validate_input(&input)?;
+    let word = {
+        let conn = state.db.lock().unwrap();
+        conn.execute(
+            r#"
+            UPDATE vocabs
+            SET word = ?1, meaning = ?2, example = ?3, category = ?4, updated_at = datetime('now')
+            WHERE id = ?5
+            "#,
+            params![
+                cleaned.word,
+                cleaned.meaning,
+                cleaned.example,
+                cleaned.category,
+                id
+            ],
+        )
+        .map_err(|err| format!("Failed to update vocabulary: {err}"))?;
+
+        get_vocab_by_id(&conn, id)?.ok_or_else(|| "Vocabulary word was not found".to_string())?
+    };
+
+    sync_after_vocab_change(&app, &state)?;
+    Ok(word)
+}
+
+#[tauri::command]
+fn delete_vocab(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    id: i64,
+) -> Result<(), String> {
+    {
+        let conn = state.db.lock().unwrap();
+        conn.execute("DELETE FROM vocabs WHERE id = ?1", params![id])
+            .map_err(|err| format!("Failed to delete vocabulary: {err}"))?;
+    }
+
+    sync_after_vocab_change(&app, &state)?;
+    Ok(())
 }
 
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
     *state.is_window_visible.lock().unwrap() = true;
     if let Some(window) = app.get_webview_window("main") {
-        // Position popup near menu bar (top-right area)
         let _ = position_popup_window(&window);
         let _ = window.show();
         let _ = window.set_focus();
     }
 }
 
-fn position_popup_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
-    // Get monitor for scale factor
-    let monitor = window.primary_monitor()?.unwrap_or_else(|| {
-        window.available_monitors().unwrap_or_default().into_iter().next().unwrap()
-    });
+#[tauri::command]
+fn show_manager_window(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("manager") else {
+        return Err("Manager window was not found".into());
+    };
 
-    let screen_size = monitor.size();
-    let scale_factor = monitor.scale_factor();
-    let window_width = 320.0 * scale_factor;
-
-    // Position near top-right (default if click position not available)
-    let x = screen_size.width as f64 - window_width - (20.0 * scale_factor);
-    let y = 30.0 * scale_factor;
-
-    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-        x: x as i32,
-        y: y as i32,
-    }))?;
-
-    Ok(())
-}
-
-fn position_popup_at_click(window: &tauri::WebviewWindow, click_x: f64, click_y: f64) -> tauri::Result<()> {
-    // Get window size
-    let window_size = window.outer_size()?;
-    let window_width = window_size.width as f64;
-
-    // Position popup below and aligned with click position (tray icon)
-    // Adjust x so popup doesn't go off-screen to the right
-    let x = (click_x - window_width / 2.0).max(10.0);
-    let y = click_y + 5.0; // Small gap below menubar
-
-    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-        x: x as i32,
-        y: y as i32,
-    }))?;
-
+    window
+        .show()
+        .map_err(|err| format!("Failed to show manager: {err}"))?;
+    window
+        .set_focus()
+        .map_err(|err| format!("Failed to focus manager: {err}"))?;
     Ok(())
 }
 
@@ -119,24 +564,83 @@ fn hide_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
     }
 }
 
+fn position_popup_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    let monitor = window.primary_monitor()?.unwrap_or_else(|| {
+        window
+            .available_monitors()
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .unwrap()
+    });
+
+    let screen_size = monitor.size();
+    let scale_factor = monitor.scale_factor();
+    let window_width = 320.0 * scale_factor;
+
+    let x = screen_size.width as f64 - window_width - (20.0 * scale_factor);
+    let y = 30.0 * scale_factor;
+
+    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+        x: x as i32,
+        y: y as i32,
+    }))?;
+
+    Ok(())
+}
+
+fn position_popup_at_click(
+    window: &tauri::WebviewWindow,
+    click_x: f64,
+    click_y: f64,
+) -> tauri::Result<()> {
+    let monitors = window.available_monitors()?;
+    let click_monitor = monitors
+        .iter()
+        .find(|monitor| {
+            let pos = monitor.position();
+            let size = monitor.size();
+            let x = pos.x as f64;
+            let y = pos.y as f64;
+            let width = size.width as f64;
+            let height = size.height as f64;
+
+            click_x >= x && click_x < x + width && click_y >= y && click_y < y + height
+        })
+        .unwrap_or_else(|| monitors.first().unwrap());
+
+    let scale_factor = click_monitor.scale_factor();
+    let screen_pos = click_monitor.position();
+    let screen_size = click_monitor.size();
+    let window_width = 320.0 * scale_factor;
+
+    let min_x = screen_pos.x as f64 + 10.0;
+    let max_x = screen_pos.x as f64 + screen_size.width as f64 - window_width - 10.0;
+    let x = (click_x - window_width / 2.0).max(min_x).min(max_x);
+    let y = click_y + 5.0;
+
+    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+        x: x as i32,
+        y: y as i32,
+    }))?;
+
+    Ok(())
+}
+
 fn start_auto_rotation(app: tauri::AppHandle, state: AppState) {
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(Duration::from_secs(10));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(10));
 
-            // Only rotate if window is not visible
-            let is_visible = *state.is_window_visible.lock().unwrap();
-            if !is_visible {
-                let mut index = state.current_index.lock().unwrap();
-                let vocab_list = state.vocab_list.lock().unwrap();
+        let is_visible = *state.is_window_visible.lock().unwrap();
+        if !is_visible {
+            let mut index = state.current_index.lock().unwrap();
+            let vocab_list = state.vocab_list.lock().unwrap();
 
-                if !vocab_list.is_empty() {
-                    *index = (*index + 1) % vocab_list.len();
-                    if let Some(word) = vocab_list.get(*index) {
-                        update_tray_title(&app, &word.word);
-                        // Emit event to frontend to update if needed
-                        let _ = app.emit("vocab-changed", word.clone());
-                    }
+            if !vocab_list.is_empty() {
+                *index = (*index + 1) % vocab_list.len();
+                if let Some(word) = vocab_list.get(*index) {
+                    update_tray_title(&app, &word.word);
+                    let _ = app.emit("vocab-changed", word.clone());
                 }
             }
         }
@@ -144,67 +648,67 @@ fn start_auto_rotation(app: tauri::AppHandle, state: AppState) {
 }
 
 fn setup_system_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
-    // Remove menu to allow direct left-click on tray text
-    // Users can now click the menubar text directly to toggle the popup
     let _ = app.tray_by_id("main").unwrap().set_menu::<Menu<R>>(None);
     Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Load vocab data
-    let vocab_list = load_vocab_from_json();
-    let initial_word = vocab_list.first().map(|w| w.word.clone());
-
-    // Initialize app state
-    let app_state = AppState {
-        vocab_list: Arc::new(Mutex::new(vocab_list)),
-        current_index: Arc::new(Mutex::new(0)),
-        is_window_visible: Arc::new(Mutex::new(false)),
-    };
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(app_state.clone())
         .invoke_handler(tauri::generate_handler![
-            greet,
             show_main_window,
             hide_main_window,
+            show_manager_window,
+            list_vocab_words,
             get_current_vocab_word,
-            update_current_word_index
+            update_current_word_index,
+            set_current_vocab_id,
+            lookup_vocab_word,
+            create_vocab,
+            add_vocab_from_cambridge,
+            update_vocab,
+            delete_vocab
         ])
         .setup(move |app| {
-            // Setup system tray
             setup_system_tray(app.handle())?;
 
-            // Set initial tray title
-            if let Some(word) = initial_word {
-                update_tray_title(app.handle(), &word);
+            let conn = init_database(app.handle())?;
+            let initial_vocab = list_vocab_from_db(&conn)?;
+            let app_state = AppState {
+                db: Arc::new(Mutex::new(conn)),
+                vocab_list: Arc::new(Mutex::new(initial_vocab)),
+                current_index: Arc::new(Mutex::new(0)),
+                is_window_visible: Arc::new(Mutex::new(false)),
+            };
+
+            if let Some(word) = current_word(&app_state) {
+                update_tray_title(app.handle(), &word.word);
             }
 
-            // Start auto-rotation
+            sync_backup_from_state(&app_state)?;
+
+            app.manage(app_state.clone());
             start_auto_rotation(app.handle().clone(), app_state.clone());
 
-            // Hide main window on startup
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
 
-                // Apply window vibrancy for maximum transparency with rounded corners
                 #[cfg(target_os = "macos")]
                 {
-                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
                     use cocoa::base::{id, YES};
                     use objc::{msg_send, sel, sel_impl};
+                    use window_vibrancy::{
+                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                    };
 
-                    // Apply vibrancy with Popover for light blur and high transparency
                     let _ = apply_vibrancy(
                         &window,
                         NSVisualEffectMaterial::Popover,
                         Some(NSVisualEffectState::Active),
-                        None
+                        None,
                     );
 
-                    // Then apply rounded corners to the content view
                     let ns_window = window.ns_window().unwrap() as id;
                     unsafe {
                         let content_view: id = msg_send![ns_window, contentView];
@@ -216,7 +720,6 @@ pub fn run() {
                     }
                 }
 
-                // Hide popup when focus is lost (clicking outside)
                 let window_clone = window.clone();
                 let state_clone = app_state.clone();
                 window.on_window_event(move |event| {
@@ -246,7 +749,6 @@ pub fn run() {
                             let _ = window.hide();
                         } else {
                             *state.is_window_visible.lock().unwrap() = true;
-                            // Position popup at click location (tray icon position)
                             let _ = position_popup_at_click(&window, position.x, position.y);
                             let _ = window.show().and_then(|_| window.set_focus());
                         }

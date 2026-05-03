@@ -26,6 +26,23 @@
         "transparent": true,
         "shadow": true,
         "center": false
+      },
+      {
+        "label": "manager",
+        "title": "Vocabulary Manager",
+        "width": 760,
+        "height": 580,
+        "minWidth": 680,
+        "minHeight": 500,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "visible": false,
+        "transparent": false,
+        "shadow": true,
+        "center": true
       }
     ],
     "trayIcon": {

@@ -1,10 +1,13 @@
+import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useVocab } from './hooks/useVocab';
 import { VocabCard } from './components/VocabCard';
 import { LoadingState } from './components/LoadingState';
 import { ErrorState } from './components/ErrorState';
+import { VocabManager } from './components/VocabManager';
 import "./App.css";
 
-function App() {
+function LearningApp() {
   const { 
     currentWord, 
     loading, 
@@ -34,9 +37,18 @@ function App() {
         onNext={getNextWord}
         onPrevious={getPreviousWord}
         onRandom={getRandomWord}
+        onManage={() => invoke('show_manager_window')}
       />
     </main>
   );
+}
+
+function App() {
+  if (getCurrentWindow().label === 'manager') {
+    return <VocabManager />;
+  }
+
+  return <LearningApp />;
 }
 
 export default App;

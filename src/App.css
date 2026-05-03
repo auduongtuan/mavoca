@@ -66,7 +66,7 @@ html, body {
   font-weight: 700;
   color: #37352f;
   margin: 0;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .category {
@@ -162,6 +162,310 @@ html, body {
 .random-btn:hover {
   background: rgba(55, 53, 47, 0.85);
   border-color: rgba(255, 255, 255, 0.4);
+}
+
+.manage-btn {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(55, 53, 47, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #37352f;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.manage-btn:hover {
+  background: rgba(255, 255, 255, 0.28);
+  border-color: rgba(55, 53, 47, 0.2);
+}
+
+/* Vocabulary Manager */
+.manager-shell {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 245px 1fr;
+  background: #ededeb;
+  color: #37352f;
+  color-scheme: light;
+  overflow: hidden;
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+}
+
+.manager-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-right: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(222, 222, 218, 0.86);
+  padding: 18px 14px;
+  gap: 14px;
+}
+
+.manager-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #37352f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.manager-title strong {
+  min-width: 28px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(55, 53, 47, 0.76);
+  color: #ffffff;
+  text-align: center;
+  font-size: 11px;
+}
+
+.manager-search,
+.lookup-bar input,
+.form-grid input,
+.form-grid select,
+.form-grid textarea {
+  width: 100%;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #37352f;
+  font: inherit;
+  outline: none;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.manager-search,
+.lookup-bar input,
+.form-grid input,
+.form-grid select {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.form-grid select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 14px,
+    calc(100% - 10px) 14px;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 30px;
+}
+
+.form-grid textarea {
+  resize: vertical;
+  min-height: 78px;
+  padding: 9px 10px;
+  line-height: 1.45;
+}
+
+.manager-search:focus,
+.lookup-bar input:focus,
+.form-grid input:focus,
+.form-grid select:focus,
+.form-grid textarea:focus {
+  border-color: rgba(55, 53, 47, 0.36);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.word-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.word-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #37352f;
+  text-align: left;
+  cursor: pointer;
+}
+
+.word-row:hover {
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.word-row.active {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.word-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.word-row small {
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #787774;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.manager-empty {
+  padding: 14px 8px;
+  color: #787774;
+  font-size: 12px;
+}
+
+.manager-editor {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: auto;
+  padding: 30px 32px;
+  gap: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0.2)),
+    rgba(246, 246, 244, 0.72);
+}
+
+.editor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.eyebrow {
+  color: #787774;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.editor-header h1 {
+  margin-top: 2px;
+  color: #37352f;
+  font-size: 24px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.lookup-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 10px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 160px;
+  gap: 14px;
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: #787774;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.form-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.primary-btn,
+.secondary-btn,
+.danger-btn,
+.lookup-bar button {
+  height: 34px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  padding: 0 13px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary-btn,
+.lookup-bar button {
+  background: #37352f;
+  border-color: #37352f;
+  color: #ffffff;
+}
+
+.secondary-btn {
+  background: rgba(255, 255, 255, 0.68);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #37352f;
+}
+
+.danger-btn {
+  background: #fff1f0;
+  border-color: #efb2aa;
+  color: #9b2f2a;
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled,
+.danger-btn:disabled,
+.lookup-bar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.manager-alert {
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.manager-alert.error {
+  background: #fff1f0;
+  border: 1px solid #efb2aa;
+  color: #9b2f2a;
+}
+
+.manager-alert.success {
+  background: rgba(237, 245, 236, 0.78);
+  border: 1px solid #bed8b9;
+  color: #2e4d3d;
 }
 
 /* Loading State */
@@ -311,6 +615,117 @@ html, body {
   .random-btn:hover {
     background: rgba(227, 226, 224, 0.35);
     border-color: rgba(255, 255, 255, 0.45);
+  }
+
+  .manage-btn {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e3e2e0;
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .manage-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.28);
+  }
+
+  .manager-shell {
+    background: #2f2e2c;
+    color: #e3e2e0;
+    color-scheme: dark;
+  }
+
+  .manager-sidebar {
+    background: rgba(38, 37, 35, 0.92);
+    border-right-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .manager-title,
+  .word-row,
+  .editor-header h1 {
+    color: #e3e2e0;
+  }
+
+  .manager-title strong,
+  .primary-btn,
+  .lookup-bar button {
+    background: #e3e2e0;
+    color: #2f2e2c;
+    border-color: #e3e2e0;
+  }
+
+  .manager-search,
+  .lookup-bar input,
+  .form-grid input,
+  .form-grid select,
+  .form-grid textarea {
+    background: rgba(255, 255, 255, 0.09);
+    color: #e3e2e0;
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+
+  .form-grid select option {
+    background: #2f2e2c;
+    color: #e3e2e0;
+  }
+
+  .manager-search::placeholder,
+  .lookup-bar input::placeholder {
+    color: rgba(227, 226, 224, 0.46);
+  }
+
+  .manager-search:focus,
+  .lookup-bar input:focus,
+  .form-grid input:focus,
+  .form-grid select:focus,
+  .form-grid textarea:focus {
+    border-color: rgba(255, 255, 255, 0.34);
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .word-row:hover {
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  .word-row.active {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+
+  .word-row small,
+  .manager-empty,
+  .eyebrow,
+  .form-grid label {
+    color: #9b9a97;
+  }
+
+  .secondary-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #e3e2e0;
+  }
+
+  .manager-editor {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+      rgba(63, 62, 59, 0.72);
+  }
+
+  .danger-btn {
+    background: rgba(142, 50, 29, 0.2);
+    border-color: rgba(227, 188, 168, 0.32);
+    color: #f0b5a3;
+  }
+
+  .manager-alert.error {
+    background: rgba(142, 50, 29, 0.18);
+    border-color: rgba(227, 188, 168, 0.28);
+    color: #f0b5a3;
+  }
+
+  .manager-alert.success {
+    background: rgba(46, 77, 61, 0.32);
+    border-color: rgba(190, 216, 185, 0.28);
+    color: #cfe4c9;
   }
 
   .loading-state,
