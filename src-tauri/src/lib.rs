@@ -779,6 +779,7 @@ fn setup_system_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()>
     let menu = Menu::with_items(app, &[&manager_item, &settings_item])?;
     let tray = app.tray_by_id("main").unwrap();
     tray.set_menu(Some(menu))?;
+    tray.set_icon(None)?;
     tray.set_show_menu_on_left_click(false)?;
     Ok(())
 }
