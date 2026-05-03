@@ -14,3 +14,7 @@ export interface VocabInput {
   example: string;
   category: string;
 }
+
+export interface AppSettings {
+  backupPath: string;
+}

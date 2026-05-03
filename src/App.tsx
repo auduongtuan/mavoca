@@ -5,6 +5,7 @@ import { VocabCard } from './components/VocabCard';
 import { LoadingState } from './components/LoadingState';
 import { ErrorState } from './components/ErrorState';
 import { VocabManager } from './components/VocabManager';
+import { SettingsPanel } from './components/SettingsPanel';
 import "./App.css";
 
 function LearningApp() {
@@ -46,6 +47,10 @@ function LearningApp() {
 function App() {
   if (getCurrentWindow().label === 'manager') {
     return <VocabManager />;
+  }
+
+  if (getCurrentWindow().label === 'settings') {
+    return <SettingsPanel />;
   }
 
   return <LearningApp />;

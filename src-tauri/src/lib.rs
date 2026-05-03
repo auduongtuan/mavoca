@@ -6,7 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, fs};
-use tauri::{menu::Menu, Emitter, Manager, Runtime};
+use tauri::{
+    menu::{Menu, MenuItem},
+    Emitter, Manager, Runtime,
+};
+
+const BACKUP_PATH_SETTING: &str = "backup_path";
+const TRAY_OPEN_MANAGER_ID: &str = "open-manager";
+const TRAY_OPEN_SETTINGS_ID: &str = "open-settings";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +41,12 @@ struct VocabInput {
     meaning: String,
     example: String,
     category: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppSettings {
+    backup_path: String,
 }
 
 #[derive(Clone)]
@@ -100,9 +113,16 @@ fn init_database(app: &tauri::AppHandle) -> Result<Connection, String> {
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         "#,
     )
     .map_err(|err| format!("Failed to initialize database: {err}"))?;
+
+    ensure_default_settings(&conn)?;
 
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM vocabs", [], |row| row.get(0))
@@ -124,7 +144,7 @@ fn init_database(app: &tauri::AppHandle) -> Result<Connection, String> {
     Ok(conn)
 }
 
-fn dropbox_backup_path() -> Option<PathBuf> {
+fn default_backup_path() -> Option<PathBuf> {
     let home = env::var_os("HOME")?;
     let dropbox_dir = Path::new(&home).join("Dropbox");
     if !dropbox_dir.exists() {
@@ -134,31 +154,98 @@ fn dropbox_backup_path() -> Option<PathBuf> {
     Some(dropbox_dir.join("Vocab Learning").join("vocab.sqlite3"))
 }
 
+fn expand_backup_path(value: &str) -> Option<PathBuf> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let expanded = if trimmed == "~" {
+        env::var_os("HOME").map(PathBuf::from)?
+    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+        env::var_os("HOME").map(PathBuf::from)?.join(rest)
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    if expanded.is_dir() || expanded.extension().is_none() {
+        Some(expanded.join("vocab.sqlite3"))
+    } else {
+        Some(expanded)
+    }
+}
+
+fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|err| format!("Failed to read setting '{key}': {err}"))
+}
+
+fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
+    conn.execute(
+        r#"
+        INSERT INTO settings (key, value)
+        VALUES (?1, ?2)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        "#,
+        params![key, value],
+    )
+    .map_err(|err| format!("Failed to save setting '{key}': {err}"))?;
+
+    Ok(())
+}
+
+fn ensure_default_settings(conn: &Connection) -> Result<(), String> {
+    if get_setting(conn, BACKUP_PATH_SETTING)?.is_none() {
+        let backup_path = default_backup_path()
+            .and_then(|path| path.to_str().map(|value| value.to_string()))
+            .unwrap_or_default();
+        set_setting(conn, BACKUP_PATH_SETTING, &backup_path)?;
+    }
+
+    Ok(())
+}
+
+fn load_settings_from_db(conn: &Connection) -> Result<AppSettings, String> {
+    Ok(AppSettings {
+        backup_path: get_setting(conn, BACKUP_PATH_SETTING)?.unwrap_or_default(),
+    })
+}
+
+fn configured_backup_path(conn: &Connection) -> Result<Option<PathBuf>, String> {
+    let settings = load_settings_from_db(conn)?;
+    Ok(expand_backup_path(&settings.backup_path))
+}
+
 fn sync_database_backup(conn: &Connection) -> Result<(), String> {
-    let Some(backup_path) = dropbox_backup_path() else {
+    let Some(backup_path) = configured_backup_path(conn)? else {
         return Ok(());
     };
 
     let backup_dir = backup_path
         .parent()
-        .ok_or_else(|| "Invalid Dropbox backup path".to_string())?;
+        .ok_or_else(|| "Invalid backup path".to_string())?;
     fs::create_dir_all(backup_dir)
-        .map_err(|err| format!("Failed to create Dropbox backup directory: {err}"))?;
+        .map_err(|err| format!("Failed to create backup directory: {err}"))?;
 
     let temp_path = backup_path.with_extension("sqlite3.tmp");
     if temp_path.exists() {
         fs::remove_file(&temp_path)
-            .map_err(|err| format!("Failed to remove stale Dropbox backup: {err}"))?;
+            .map_err(|err| format!("Failed to remove stale backup: {err}"))?;
     }
 
     let temp_path_str = temp_path
         .to_str()
-        .ok_or_else(|| "Dropbox backup path is not valid UTF-8".to_string())?;
+        .ok_or_else(|| "Backup path is not valid UTF-8".to_string())?;
     conn.execute("VACUUM main INTO ?1", params![temp_path_str])
-        .map_err(|err| format!("Failed to create SQLite Dropbox backup: {err}"))?;
+        .map_err(|err| format!("Failed to create SQLite backup: {err}"))?;
 
     fs::rename(&temp_path, &backup_path)
-        .map_err(|err| format!("Failed to replace Dropbox backup: {err}"))?;
+        .map_err(|err| format!("Failed to replace backup: {err}"))?;
 
     Ok(())
 }
@@ -424,6 +511,23 @@ fn lookup_vocab_word(word: String) -> Result<VocabInput, String> {
 }
 
 #[tauri::command]
+fn get_settings(state: tauri::State<AppState>) -> Result<AppSettings, String> {
+    let conn = state.db.lock().unwrap();
+    load_settings_from_db(&conn)
+}
+
+#[tauri::command]
+fn update_settings(
+    state: tauri::State<AppState>,
+    settings: AppSettings,
+) -> Result<AppSettings, String> {
+    let conn = state.db.lock().unwrap();
+    set_setting(&conn, BACKUP_PATH_SETTING, settings.backup_path.trim())?;
+    sync_database_backup(&conn)?;
+    load_settings_from_db(&conn)
+}
+
+#[tauri::command]
 fn create_vocab(
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
@@ -557,6 +661,21 @@ fn show_manager_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn show_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("settings") else {
+        return Err("Settings window was not found".into());
+    };
+
+    window
+        .show()
+        .map_err(|err| format!("Failed to show settings: {err}"))?;
+    window
+        .set_focus()
+        .map_err(|err| format!("Failed to focus settings: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn hide_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
     *state.is_window_visible.lock().unwrap() = false;
     if let Some(window) = app.get_webview_window("main") {
@@ -648,7 +767,19 @@ fn start_auto_rotation(app: tauri::AppHandle, state: AppState) {
 }
 
 fn setup_system_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
-    let _ = app.tray_by_id("main").unwrap().set_menu::<Menu<R>>(None);
+    let manager_item = MenuItem::with_id(
+        app,
+        TRAY_OPEN_MANAGER_ID,
+        "Vocabulary Manager",
+        true,
+        None::<&str>,
+    )?;
+    let settings_item =
+        MenuItem::with_id(app, TRAY_OPEN_SETTINGS_ID, "Settings", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&manager_item, &settings_item])?;
+    let tray = app.tray_by_id("main").unwrap();
+    tray.set_menu(Some(menu))?;
+    tray.set_show_menu_on_left_click(false)?;
     Ok(())
 }
 
@@ -660,11 +791,14 @@ pub fn run() {
             show_main_window,
             hide_main_window,
             show_manager_window,
+            show_settings_window,
             list_vocab_words,
             get_current_vocab_word,
             update_current_word_index,
             set_current_vocab_id,
             lookup_vocab_word,
+            get_settings,
+            update_settings,
             create_vocab,
             add_vocab_from_cambridge,
             update_vocab,
@@ -696,8 +830,7 @@ pub fn run() {
 
                 #[cfg(target_os = "macos")]
                 {
-                    use cocoa::base::{id, YES};
-                    use objc::{msg_send, sel, sel_impl};
+                    use objc2_app_kit::NSWindow;
                     use window_vibrancy::{
                         apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
                     };
@@ -709,14 +842,15 @@ pub fn run() {
                         None,
                     );
 
-                    let ns_window = window.ns_window().unwrap() as id;
                     unsafe {
-                        let content_view: id = msg_send![ns_window, contentView];
-                        let _: () = msg_send![content_view, setWantsLayer: YES];
-
-                        let layer: id = msg_send![content_view, layer];
-                        let _: () = msg_send![layer, setCornerRadius: 12.0_f64];
-                        let _: () = msg_send![layer, setMasksToBounds: YES];
+                        let ns_window = &*(window.ns_window().unwrap() as *mut NSWindow);
+                        if let Some(content_view) = ns_window.contentView() {
+                            content_view.setWantsLayer(true);
+                            if let Some(layer) = content_view.layer() {
+                                layer.setCornerRadius(12.0);
+                                layer.setMasksToBounds(true);
+                            }
+                        }
                     }
                 }
 
@@ -731,6 +865,19 @@ pub fn run() {
             }
 
             Ok(())
+        })
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TRAY_OPEN_MANAGER_ID => {
+                if let Some(window) = app.get_webview_window("manager") {
+                    let _ = window.show().and_then(|_| window.set_focus());
+                }
+            }
+            TRAY_OPEN_SETTINGS_ID => {
+                if let Some(window) = app.get_webview_window("settings") {
+                    let _ = window.show().and_then(|_| window.set_focus());
+                }
+            }
+            _ => {}
         })
         .on_tray_icon_event(move |tray, event| {
             if let tauri::tray::TrayIconEvent::Click {

@@ -43,13 +43,31 @@
         "transparent": false,
         "shadow": true,
         "center": true
+      },
+      {
+        "label": "settings",
+        "title": "Settings",
+        "width": 560,
+        "height": 360,
+        "minWidth": 480,
+        "minHeight": 320,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "visible": false,
+        "transparent": false,
+        "shadow": true,
+        "center": true
       }
     ],
     "trayIcon": {
       "id": "main",
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true,
-      "menuOnLeftClick": false
+      "menuOnLeftClick": false,
+      "showMenuOnLeftClick": false
     },
     "security": {
       "csp": null

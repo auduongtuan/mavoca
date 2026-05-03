@@ -197,6 +197,24 @@ html, body {
   -webkit-backdrop-filter: blur(40px) saturate(180%);
 }
 
+.settings-shell {
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0.18)),
+    #ededeb;
+  color: #37352f;
+  color-scheme: light;
+  padding: 28px;
+  overflow: auto;
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 56px);
+  gap: 18px;
+}
+
 .manager-sidebar {
   display: flex;
   flex-direction: column;
@@ -228,6 +246,7 @@ html, body {
 
 .manager-search,
 .lookup-bar input,
+.settings-field input,
 .form-grid input,
 .form-grid select,
 .form-grid textarea {
@@ -245,6 +264,7 @@ html, body {
 
 .manager-search,
 .lookup-bar input,
+.settings-field input,
 .form-grid input,
 .form-grid select {
   height: 34px;
@@ -274,6 +294,7 @@ html, body {
 
 .manager-search:focus,
 .lookup-bar input:focus,
+.settings-field input:focus,
 .form-grid input:focus,
 .form-grid select:focus,
 .form-grid textarea:focus {
@@ -399,6 +420,32 @@ html, body {
 
 .form-grid .wide {
   grid-column: 1 / -1;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-field label {
+  color: #787774;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.settings-field p {
+  color: #787774;
+  font-size: 12px;
+}
+
+.settings-field code {
+  margin-left: 4px;
+  color: #37352f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
 }
 
 .editor-actions {
@@ -634,6 +681,14 @@ html, body {
     color-scheme: dark;
   }
 
+  .settings-shell {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+      #2f2e2c;
+    color: #e3e2e0;
+    color-scheme: dark;
+  }
+
   .manager-sidebar {
     background: rgba(38, 37, 35, 0.92);
     border-right-color: rgba(255, 255, 255, 0.08);
@@ -655,6 +710,7 @@ html, body {
 
   .manager-search,
   .lookup-bar input,
+  .settings-field input,
   .form-grid input,
   .form-grid select,
   .form-grid textarea {
@@ -669,12 +725,14 @@ html, body {
   }
 
   .manager-search::placeholder,
-  .lookup-bar input::placeholder {
+  .lookup-bar input::placeholder,
+  .settings-field input::placeholder {
     color: rgba(227, 226, 224, 0.46);
   }
 
   .manager-search:focus,
   .lookup-bar input:focus,
+  .settings-field input:focus,
   .form-grid input:focus,
   .form-grid select:focus,
   .form-grid textarea:focus {
@@ -694,8 +752,14 @@ html, body {
   .word-row small,
   .manager-empty,
   .eyebrow,
+  .settings-field label,
+  .settings-field p,
   .form-grid label {
     color: #9b9a97;
+  }
+
+  .settings-field code {
+    color: #e3e2e0;
   }
 
   .secondary-btn {
