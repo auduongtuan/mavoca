@@ -505,9 +505,7 @@ html, body {
   overflow: auto;
   padding: 28px 30px;
   gap: 18px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.12)),
-    rgba(246, 246, 244, 0.54);
+  background: #f7f7f5;
 }
 
 .editor-header {
@@ -592,17 +590,19 @@ html, body {
 .tree-editor {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
 }
 
 .tree-entry {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.38);
+}
+
+/* Entries are separated by a rule rather than boxed, to keep nesting flat. */
+.tree-entry + .tree-entry {
+  padding-top: 18px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .tree-entry-header {
@@ -615,11 +615,9 @@ html, body {
 .tree-group {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.5);
+  gap: 14px;
+  padding-left: 12px;
+  border-left: 2px solid rgba(55, 53, 47, 0.12);
 }
 
 .tree-group-header {
@@ -633,8 +631,6 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding-left: 12px;
-  border-left: 2px solid rgba(55, 53, 47, 0.12);
 }
 
 .tree-definition-header {
@@ -678,9 +674,9 @@ html, body {
 .tree-add,
 .tree-remove {
   padding: 6px 10px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(0, 0, 0, 0.14);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.7);
+  background: transparent;
   color: #37352f;
   cursor: pointer;
   font-size: 11px;
@@ -689,12 +685,16 @@ html, body {
 }
 
 .tree-remove {
+  border-color: rgba(179, 38, 30, 0.3);
   color: #b3261e;
 }
 
-.tree-add:hover,
+.tree-add:hover {
+  background: rgba(55, 53, 47, 0.06);
+}
+
 .tree-remove:hover {
-  background: rgba(255, 255, 255, 0.95);
+  background: rgba(179, 38, 30, 0.08);
 }
 
 .tree-add:disabled,
@@ -1085,17 +1085,11 @@ html, body {
     color: #e3e2e0;
   }
 
-  .tree-entry {
-    background: rgba(255, 255, 255, 0.04);
-    border-color: rgba(255, 255, 255, 0.1);
+  .tree-entry + .tree-entry {
+    border-top-color: rgba(255, 255, 255, 0.1);
   }
 
   .tree-group {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(255, 255, 255, 0.08);
-  }
-
-  .tree-definition {
     border-left-color: rgba(255, 255, 255, 0.16);
   }
 
@@ -1111,19 +1105,21 @@ html, body {
     color: rgba(227, 226, 224, 0.46);
   }
 
-  .tree-add,
-  .tree-remove {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.14);
+  .tree-add {
+    border-color: rgba(255, 255, 255, 0.18);
   }
 
   .tree-remove {
+    border-color: rgba(240, 181, 163, 0.32);
     color: #f0b5a3;
   }
 
-  .tree-add:hover,
+  .tree-add:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
   .tree-remove:hover {
-    background: rgba(255, 255, 255, 0.13);
+    background: rgba(240, 181, 163, 0.1);
   }
 
   .source-badge {
@@ -1149,9 +1145,7 @@ html, body {
   }
 
   .manager-editor {
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-      rgba(63, 62, 59, 0.44);
+    background: #232220;
   }
 
   .danger-btn {
