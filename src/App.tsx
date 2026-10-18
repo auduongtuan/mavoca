@@ -16,6 +16,8 @@ function LearningApp() {
     getRandomWord,
     getNextWord,
     getPreviousWord,
+    getNextMeaning,
+    getPreviousMeaning,
     reload
   } = useVocab();
 
@@ -38,6 +40,8 @@ function LearningApp() {
         card={card}
         onNext={getNextWord}
         onPrevious={getPreviousWord}
+        onNextMeaning={getNextMeaning}
+        onPreviousMeaning={getPreviousMeaning}
         onRandom={getRandomWord}
         onManage={() => invoke('show_manager_window')}
       />

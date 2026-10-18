@@ -23,6 +23,13 @@ const BACKUP_PATH_SETTING: &str = "backup_path";
 const TRAY_OPEN_MANAGER_ID: &str = "open-manager";
 const TRAY_OPEN_SETTINGS_ID: &str = "open-settings";
 const AUTO_ROTATION_INTERVAL_SECS: u64 = 10;
+/// Logical popup width; matches `width` for the `main` window in tauri.conf.json.
+const POPUP_WIDTH: f64 = 320.0;
+/// The popup grows to fit its card between these heights, then scrolls.
+const POPUP_MIN_HEIGHT: f64 = 240.0;
+const POPUP_MAX_HEIGHT: f64 = 720.0;
+/// Space kept between the popup's bottom edge and the bottom of the screen.
+const POPUP_SCREEN_MARGIN: f64 = 12.0;
 
 #[derive(Debug, Clone, Deserialize)]
 struct SeedVocabWord {
@@ -1137,6 +1144,32 @@ fn hide_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
     }
 }
 
+/// Fits the popup to its card. The frontend reports the card's natural height
+/// whenever it changes; the result is clamped so a long card never runs off
+/// the bottom of the screen, and the card scrolls past that.
+#[tauri::command]
+fn resize_popup(app: tauri::AppHandle, height: f64) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Err("Popup window was not found".into());
+    };
+
+    let mut max_height = POPUP_MAX_HEIGHT;
+    if let (Ok(Some(monitor)), Ok(position)) = (window.current_monitor(), window.outer_position()) {
+        let scale_factor = monitor.scale_factor();
+        let screen_bottom =
+            (monitor.position().y as f64 + monitor.size().height as f64) / scale_factor;
+        let room = screen_bottom - position.y as f64 / scale_factor - POPUP_SCREEN_MARGIN;
+        max_height = max_height.min(room);
+    }
+
+    let height = height
+        .max(POPUP_MIN_HEIGHT)
+        .min(max_height.max(POPUP_MIN_HEIGHT));
+    window
+        .set_size(tauri::LogicalSize::new(POPUP_WIDTH, height))
+        .map_err(|err| format!("Failed to resize popup: {err}"))
+}
+
 fn position_popup_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     let monitor = window.primary_monitor()?.unwrap_or_else(|| {
         window
@@ -1149,7 +1182,7 @@ fn position_popup_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 
     let screen_size = monitor.size();
     let scale_factor = monitor.scale_factor();
-    let window_width = 320.0 * scale_factor;
+    let window_width = POPUP_WIDTH * scale_factor;
 
     let x = screen_size.width as f64 - window_width - (20.0 * scale_factor);
     let y = 30.0 * scale_factor;
@@ -1185,7 +1218,7 @@ fn position_popup_at_click(
     let scale_factor = click_monitor.scale_factor();
     let screen_pos = click_monitor.position();
     let screen_size = click_monitor.size();
-    let window_width = 320.0 * scale_factor;
+    let window_width = POPUP_WIDTH * scale_factor;
 
     let min_x = screen_pos.x as f64 + 10.0;
     let max_x = screen_pos.x as f64 + screen_size.width as f64 - window_width - 10.0;
@@ -1255,6 +1288,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             show_main_window,
             hide_main_window,
+            resize_popup,
             show_manager_window,
             show_settings_window,
             list_vocab_words,

@@ -226,10 +226,18 @@ saying so. Manual sessions need macOS 26 or later.
 - The main popup is hidden on startup and hidden again when it loses focus.
 - Popup positioning is handled in Rust and uses the click position when opened
   from the tray.
+- The popup fits its card. `usePopupAutoResize` watches the card with a
+  `ResizeObserver` and calls `resize_popup`, which clamps the height between
+  `POPUP_MIN_HEIGHT` and `POPUP_MAX_HEIGHT` and to the room left on screen;
+  beyond that `.app` scrolls. `.vocab-card` must keep its natural height — if it
+  sizes from the window again (`height: 100%`, `flex: 1`), the measurement feeds
+  back into itself and the window can never shrink.
 - Auto-rotation runs every 10 seconds only while the popup is hidden.
 - The rotation unit is a single definition, not a word. Rust owns the flattened
   card list in `AppState.cards`, and `current_index` indexes into it. Prev/Next
-  walk every definition of a word before moving to the next word.
+  walk every definition of a word before moving to the next word. The ‹ ›
+  buttons beside the popup's `1 of 3` counter wrap within the current word;
+  `useVocab` turns them into `step_vocab_card` deltas.
 - `AppState.cards` and `AppState.current_index` are never locked at the same
   time. Keep it that way.
 
@@ -249,6 +257,8 @@ saying so. Manual sessions need macOS 26 or later.
 - Keep manager and settings visually aligned with the current restrained
   dark/light UI.
 - Primary buttons should use a solid background.
+- Icons come from `@phosphor-icons/react`, imported by name so only the used
+  ones are bundled. Do not hand-draw SVGs or use text glyphs or emoji as icons.
 - Part-of-speech selection in the manager is a `<select>`, not freeform text.
 - The manager title bar drags the window through `startDragging()`. Two separate
   things are required: the `mousedown` handler must call `preventDefault()`, or

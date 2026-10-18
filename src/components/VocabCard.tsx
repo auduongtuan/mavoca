@@ -1,13 +1,41 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  ArrowLeft,
+  ArrowRight,
+  CaretLeft,
+  CaretRight,
+  Shuffle,
+  SpeakerHigh,
+} from '@phosphor-icons/react';
 import { VocabCardData } from '../types';
+import { usePopupAutoResize } from '../hooks/usePopupAutoResize';
 
 const UK_VOICE_LANG = 'en-GB';
 const US_VOICE_LANG = 'en-US';
 // Slightly under normal speed so a single word is easier to catch.
 const SPEECH_RATE = 0.9;
 
-const canSpeak = typeof window !== 'undefined' && 'speechSynthesis' in window;
+// Dictionary-style short forms; anything not listed is shown in full.
+const PART_OF_SPEECH_ABBREVIATIONS: Record<string, string> = {
+  noun: 'n.',
+  verb: 'v.',
+  adjective: 'adj.',
+  adverb: 'adv.',
+  pronoun: 'pron.',
+  preposition: 'prep.',
+  conjunction: 'conj.',
+  interjection: 'interj.',
+  determiner: 'det.',
+  'phrasal verb': 'phr. v.',
+};
+
+const normalizePartOfSpeech = (partOfSpeech: string) => partOfSpeech.trim().toLowerCase();
+
+const abbreviatePartOfSpeech = (partOfSpeech: string) =>
+  PART_OF_SPEECH_ABBREVIATIONS[normalizePartOfSpeech(partOfSpeech)] ?? partOfSpeech;
+
+const canSpeak =typeof window !== 'undefined' && 'speechSynthesis' in window;
 
 /**
  * Speaks the word with a built-in macOS voice. The card shows the UK
@@ -31,6 +59,8 @@ interface VocabCardProps {
   card: VocabCardData;
   onNext: () => void;
   onPrevious: () => void;
+  onNextMeaning: () => void;
+  onPreviousMeaning: () => void;
   onRandom: () => void;
   onManage: () => void;
 }
@@ -39,10 +69,14 @@ export const VocabCard: React.FC<VocabCardProps> = ({
   card,
   onNext,
   onPrevious,
+  onNextMeaning,
+  onPreviousMeaning,
   onRandom,
   onManage
 }) => {
   const pronunciation = card.pronUk || card.pronUs;
+  const cardRef = useRef<HTMLDivElement>(null);
+  usePopupAutoResize(cardRef);
   // Index 0 is the word, index 1 the definition. The parent keys this
   // component by card, so a new card starts untranslated.
   const [translations, setTranslations] = useState<string[] | null>(null);
@@ -77,7 +111,7 @@ export const VocabCard: React.FC<VocabCardProps> = ({
   const visibleTranslations = showTranslation ? translations : null;
 
   return (
-    <div className="vocab-card">
+    <div className="vocab-card" ref={cardRef}>
       <div className="word-header">
         <div className="word-title">
           <div className="word-line">
@@ -89,12 +123,7 @@ export const VocabCard: React.FC<VocabCardProps> = ({
                 title="Pronounce"
                 aria-label={`Pronounce ${card.word}`}
               >
-                <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-                  <path
-                    d="M4 9v6h4l5 4V5L8 9H4zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"
-                    fill="currentColor"
-                  />
-                </svg>
+                <SpeakerHigh size={15} weight="bold" aria-hidden />
               </button>
             )}
           </div>
@@ -104,16 +133,40 @@ export const VocabCard: React.FC<VocabCardProps> = ({
           {/* Always rendered so showing the translation never shifts the card. */}
           <p className="translation word-translation">{visibleTranslations?.[0]}</p>
         </div>
-        <span className="category">{card.partOfSpeech}</span>
+        <span
+          className="category"
+          data-pos={normalizePartOfSpeech(card.partOfSpeech).replace(/\s+/g, '-')}
+          title={card.partOfSpeech}
+        >
+          {abbreviatePartOfSpeech(card.partOfSpeech)}
+        </span>
       </div>
 
       <div className="card-meta">
         {card.guideWord && <span className="guide-word">{card.guideWord}</span>}
         <div className="card-meta-end">
           {card.total > 1 && (
-            <span className="card-position">
-              {card.position} of {card.total}
-            </span>
+            <div className="meaning-stepper">
+              <button
+                onClick={onPreviousMeaning}
+                className="meaning-step-btn"
+                title="Previous meaning"
+                aria-label="Previous meaning"
+              >
+                <CaretLeft size={12} weight="bold" aria-hidden />
+              </button>
+              <span className="card-position">
+                {card.position} of {card.total}
+              </span>
+              <button
+                onClick={onNextMeaning}
+                className="meaning-step-btn"
+                title="Next meaning"
+                aria-label="Next meaning"
+              >
+                <CaretRight size={12} weight="bold" aria-hidden />
+              </button>
+            </div>
           )}
           <button
             onClick={toggleTranslation}
@@ -150,13 +203,16 @@ export const VocabCard: React.FC<VocabCardProps> = ({
 
       <div className="controls">
         <button onClick={onPrevious} className="control-btn">
-          ← Previous
+          <ArrowLeft size={13} weight="bold" aria-hidden />
+          Previous
         </button>
         <button onClick={onRandom} className="control-btn random-btn">
-          🎲 Random
+          <Shuffle size={13} weight="bold" aria-hidden />
+          Random
         </button>
         <button onClick={onNext} className="control-btn">
-          Next →
+          Next
+          <ArrowRight size={13} weight="bold" aria-hidden />
         </button>
       </div>
 

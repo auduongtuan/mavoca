@@ -64,6 +64,19 @@ export const useVocab = () => {
   const getNextWord = useCallback(() => void step(1), [step]);
   const getPreviousWord = useCallback(() => void step(-1), [step]);
 
+  // A word's definitions sit next to each other in the rotation, so moving
+  // between meanings is a step that wraps within the word instead of leaving it.
+  const stepMeaning = useCallback((direction: 1 | -1) => {
+    if (!card || card.total < 2) {
+      return;
+    }
+    const atEdge = direction === 1 ? card.position === card.total : card.position === 1;
+    void step(atEdge ? -direction * (card.total - 1) : direction);
+  }, [card, step]);
+
+  const getNextMeaning = useCallback(() => stepMeaning(1), [stepMeaning]);
+  const getPreviousMeaning = useCallback(() => stepMeaning(-1), [stepMeaning]);
+
   const getRandomWord = useCallback(async () => {
     try {
       const next = await invoke<VocabCardData | null>('random_vocab_card');
@@ -82,6 +95,8 @@ export const useVocab = () => {
     getRandomWord,
     getNextWord,
     getPreviousWord,
+    getNextMeaning,
+    getPreviousMeaning,
     reload: loadCard,
   };
 };
