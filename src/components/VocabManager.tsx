@@ -1,54 +1,56 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
-import { VocabInput, VocabWord } from '../types';
+import { VocabEntry, VocabTreeInput, VocabWord, WordSource } from '../types';
+import { VocabTreeEditor, createEmptyEntries } from './VocabTreeEditor';
 
-const emptyForm: VocabInput = {
-  word: '',
-  meaning: '',
-  example: '',
-  category: '',
+const sourceLabels: Record<WordSource, string> = {
+  cambridge: 'Cambridge',
+  dictionaryapi: 'dictionaryapi.dev',
+  manual: 'Manual',
 };
 
-const categoryOptions = [
-  'noun',
-  'verb',
-  'adjective',
-  'adverb',
-  'pronoun',
-  'preposition',
-  'conjunction',
-  'interjection',
-  'phrase',
-  'idiom',
-  'phrasal verb',
-  'unknown',
-];
+const definitionsOf = (word: VocabWord): string[] =>
+  word.entries
+    .flatMap((entry) => entry.senseGroups)
+    .flatMap((group) => group.definitions)
+    .map((definition) => definition.definition);
 
 export const VocabManager: React.FC = () => {
   const [words, setWords] = useState<VocabWord[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [form, setForm] = useState<VocabInput>(emptyForm);
+  const [wordName, setWordName] = useState('');
+  const [entries, setEntries] = useState<VocabEntry[]>(createEmptyEntries);
   const [query, setQuery] = useState('');
-  const [lookupWord, setLookupWord] = useState('');
+  const [newWord, setNewWord] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const selectedWord = words.find((word) => word.id === selectedId) ?? null;
-  const categories = useMemo(() => {
-    const savedCategories = words
-      .map((word) => word.category.trim())
-      .filter(Boolean);
-    const currentCategory = form.category.trim();
+  const appWindow = getCurrentWindow();
 
-    return Array.from(new Set([
-      ...categoryOptions,
-      ...savedCategories,
-      ...(currentCategory ? [currentCategory] : []),
-    ]));
-  }, [form.category, words]);
+  const handleTitlebarMouseDown = (event: React.MouseEvent<HTMLElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    // Let controls in the title bar keep their own click behaviour.
+    if ((event.target as HTMLElement).closest('button, input, select, textarea, a')) {
+      return;
+    }
+
+    // Without this the webview starts its own drag session next to the native
+    // window drag, which shows the macOS copy cursor and leaves the window put.
+    event.preventDefault();
+
+    // Both commands need an explicit capability. Report a rejection instead of
+    // discarding it, or an ACL denial looks exactly like a dead title bar.
+    const call = event.detail === 2 ? appWindow.toggleMaximize() : appWindow.startDragging();
+    call.catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  };
 
   const filteredWords = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -58,8 +60,8 @@ export const VocabManager: React.FC = () => {
 
     return words.filter((word) => (
       word.word.toLowerCase().includes(needle)
-      || word.meaning.toLowerCase().includes(needle)
-      || word.category.toLowerCase().includes(needle)
+      || word.entries.some((entry) => entry.partOfSpeech.toLowerCase().includes(needle))
+      || definitionsOf(word).some((definition) => definition.toLowerCase().includes(needle))
     ));
   }, [query, words]);
 
@@ -92,12 +94,8 @@ export const VocabManager: React.FC = () => {
 
   useEffect(() => {
     if (selectedWord) {
-      setForm({
-        word: selectedWord.word,
-        meaning: selectedWord.meaning,
-        example: selectedWord.example,
-        category: selectedWord.category,
-      });
+      setWordName(selectedWord.word);
+      setEntries(selectedWord.entries.length > 0 ? selectedWord.entries : createEmptyEntries());
     }
   }, [selectedWord]);
 
@@ -116,28 +114,30 @@ export const VocabManager: React.FC = () => {
     }
   };
 
-  const lookup = async () => {
-    setBusy(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const result = await invoke<VocabInput>('lookup_vocab_word', { word: lookupWord });
-      setSelectedId(null);
-      setForm(result);
-      setMessage('Lookup complete. Review and save the entry.');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
+  // Fetches and imports every definition in one step: no result picker.
+  const addWord = () => runAction(async () => {
+    const created = await invoke<VocabWord>('add_vocab_word', { word: newWord });
+    setSelectedId(created.id);
+    setNewWord('');
+  }, 'Word added from the dictionary.');
+
+  const refresh = () => {
+    if (!selectedId) {
+      return;
     }
+
+    runAction(async () => {
+      await invoke<VocabWord>('refresh_vocab_word', { id: selectedId });
+    }, 'Definitions refreshed from the dictionary.');
   };
 
   const save = () => runAction(async () => {
+    const input: VocabTreeInput = { word: wordName, entries };
     if (selectedId) {
-      const updated = await invoke<VocabWord>('update_vocab', { id: selectedId, input: form });
+      const updated = await invoke<VocabWord>('update_vocab', { id: selectedId, input });
       setSelectedId(updated.id);
     } else {
-      const created = await invoke<VocabWord>('create_vocab', { input: form });
+      const created = await invoke<VocabWord>('create_vocab', { input });
       setSelectedId(created.id);
     }
   }, selectedId ? 'Vocabulary updated.' : 'Vocabulary added.');
@@ -160,124 +160,127 @@ export const VocabManager: React.FC = () => {
 
   const startNew = () => {
     setSelectedId(null);
-    setForm(emptyForm);
-    setLookupWord('');
+    setWordName('');
+    setEntries(createEmptyEntries());
+    setNewWord('');
     setError(null);
     setMessage(null);
   };
 
+  const totalDefinitions = words.reduce((sum, word) => sum + word.definitionCount, 0);
+
   return (
     <main className="manager-shell">
-      <section className="manager-sidebar">
-        <div className="manager-title">
-          <span>Vocabulary</span>
-          <strong>{words.length}</strong>
-        </div>
-
-        <input
-          className="manager-search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search words"
-        />
-
-        <div className="word-list">
-          {loading ? (
-            <div className="manager-empty">Loading...</div>
-          ) : filteredWords.length === 0 ? (
-            <div className="manager-empty">No words found</div>
-          ) : (
-            filteredWords.map((word) => (
-              <button
-                key={word.id}
-                className={`word-row ${word.id === selectedId ? 'active' : ''}`}
-                onClick={() => setSelectedId(word.id)}
-              >
-                <span>{word.word}</span>
-                <small>{word.category}</small>
-              </button>
-            ))
-          )}
-        </div>
-      </section>
-
-      <section className="manager-editor">
-        <div className="editor-header">
-          <div>
-            <p className="eyebrow">SQLite-backed library</p>
-            <h1>{selectedId ? 'Edit vocabulary' : 'Add vocabulary'}</h1>
+      <div className="manager-window">
+        <header className="manager-toolbar" onMouseDown={handleTitlebarMouseDown}>
+          <div className="manager-toolbar-spacer" />
+          <div className="manager-toolbar-title">
+            <span>Vocabulary Manager</span>
+            <small>{words.length} words · {totalDefinitions} definitions</small>
           </div>
-          <button className="secondary-btn" onClick={startNew} disabled={busy}>
-            New
-          </button>
-        </div>
+          <div className="manager-toolbar-spacer" />
+        </header>
 
-        <div className="lookup-bar">
-          <input
-            value={lookupWord}
-            onChange={(event) => setLookupWord(event.target.value)}
-            placeholder="Type a word for Cambridge lookup"
-          />
-          <button onClick={lookup} disabled={busy || !lookupWord.trim()}>
-            Lookup
-          </button>
-        </div>
+        <div className="manager-main">
+          <section className="manager-sidebar">
+            <div className="manager-title">
+              <span>Vocabulary</span>
+              <strong>{words.length}</strong>
+            </div>
 
-        <div className="form-grid">
-          <label>
-            Word
             <input
-              value={form.word}
-              onChange={(event) => setForm({ ...form, word: event.target.value })}
+              className="manager-search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search words and definitions"
             />
-          </label>
 
-          <label>
-            Category
-            <select
-              value={form.category}
-              onChange={(event) => setForm({ ...form, category: event.target.value })}
-            >
-              <option value="" disabled>Select category</option>
-              {categories.map((category) => (
-                <option key={category} value={category}>
-                  {category}
-                </option>
-              ))}
-            </select>
-          </label>
+            <div className="word-list">
+              {loading ? (
+                <div className="manager-empty">Loading...</div>
+              ) : filteredWords.length === 0 ? (
+                <div className="manager-empty">No words found</div>
+              ) : (
+                filteredWords.map((word) => (
+                  <button
+                    key={word.id}
+                    className={`word-row ${word.id === selectedId ? 'active' : ''}`}
+                    onClick={() => setSelectedId(word.id)}
+                  >
+                    <span>{word.word}</span>
+                    <small>
+                      {word.definitionCount} def{word.definitionCount === 1 ? '' : 's'}
+                    </small>
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
 
-          <label className="wide">
-            Meaning
-            <textarea
-              value={form.meaning}
-              onChange={(event) => setForm({ ...form, meaning: event.target.value })}
-              rows={4}
-            />
-          </label>
+          <section className="manager-editor">
+            <div className="editor-header">
+              <div>
+                <p className="eyebrow">SQLite-backed library</p>
+                <h1>{selectedId ? 'Edit vocabulary' : 'Add vocabulary'}</h1>
+              </div>
+              <button className="secondary-btn" onClick={startNew} disabled={busy}>
+                New
+              </button>
+            </div>
 
-          <label className="wide">
-            Example
-            <textarea
-              value={form.example}
-              onChange={(event) => setForm({ ...form, example: event.target.value })}
-              rows={3}
-            />
-          </label>
+            <div className="lookup-bar">
+              <input
+                value={newWord}
+                onChange={(event) => setNewWord(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && newWord.trim() && !busy) {
+                    addWord();
+                  }
+                }}
+                placeholder="Type a word to add with dictionary definitions"
+              />
+              <button onClick={addWord} disabled={busy || !newWord.trim()}>
+                {busy ? 'Working...' : 'Add'}
+              </button>
+            </div>
+
+            <div className="form-grid">
+              <label>
+                Word
+                <input
+                  value={wordName}
+                  onChange={(event) => setWordName(event.target.value)}
+                />
+              </label>
+
+              {selectedWord && (
+                <div className="word-source">
+                  <span className={`source-badge source-${selectedWord.source}`}>
+                    {sourceLabels[selectedWord.source]}
+                  </span>
+                  <button className="secondary-btn" onClick={refresh} disabled={busy}>
+                    Refresh from dictionary
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <VocabTreeEditor entries={entries} onChange={setEntries} disabled={busy} />
+
+            {error && <p className="manager-alert error">{error}</p>}
+            {message && <p className="manager-alert success">{message}</p>}
+
+            <div className="editor-actions">
+              <button className="danger-btn" onClick={remove} disabled={busy || !selectedId}>
+                Delete
+              </button>
+              <button className="primary-btn" onClick={save} disabled={busy}>
+                {busy ? 'Saving...' : 'Save vocabulary'}
+              </button>
+            </div>
+          </section>
         </div>
-
-        {error && <p className="manager-alert error">{error}</p>}
-        {message && <p className="manager-alert success">{message}</p>}
-
-        <div className="editor-actions">
-          <button className="danger-btn" onClick={remove} disabled={busy || !selectedId}>
-            Delete
-          </button>
-          <button className="primary-btn" onClick={save} disabled={busy}>
-            {busy ? 'Saving...' : 'Save vocabulary'}
-          </button>
-        </div>
-      </section>
+      </div>
     </main>
   );
 };

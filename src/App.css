@@ -61,12 +61,23 @@ html, body {
   gap: 10px;
 }
 
+.word-title {
+  min-width: 0;
+}
+
 .word {
   font-size: 22px;
   font-weight: 700;
   color: #37352f;
   margin: 0;
   letter-spacing: 0;
+}
+
+.word-pronunciation {
+  margin-top: 2px;
+  color: #787774;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .category {
@@ -82,6 +93,30 @@ html, body {
   white-space: nowrap;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+.card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 14px;
+}
+
+.guide-word {
+  color: rgba(55, 53, 47, 0.65);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.card-position {
+  margin-left: auto;
+  color: rgba(55, 53, 47, 0.5);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .meaning {
@@ -187,15 +222,81 @@ html, body {
 /* Vocabulary Manager */
 .manager-shell {
   height: 100vh;
-  display: grid;
-  grid-template-columns: 245px 1fr;
-  background: #ededeb;
+  display: flex;
+  background: transparent;
   color: #37352f;
   color-scheme: light;
   overflow: hidden;
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
 }
+
+.manager-window {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: transparent;
+}
+
+.manager-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 48px;
+  padding: 0 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  flex-shrink: 0;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+
+.manager-toolbar * {
+  -webkit-user-drag: none;
+}
+
+.manager-toolbar-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  gap: 1px;
+  color: #5b5a55;
+  text-align: center;
+}
+
+.manager-toolbar-title span {
+  color: #37352f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.manager-toolbar-title small {
+  color: #787774;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.manager-toolbar-spacer {
+  width: 84px;
+  flex-shrink: 0;
+}
+
+.manager-main {
+  display: grid;
+  grid-template-columns: 245px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
 
 .settings-shell {
   min-height: 100vh;
@@ -219,10 +320,13 @@ html, body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border-right: 1px solid rgba(0, 0, 0, 0.08);
-  background: rgba(222, 222, 218, 0.86);
+  min-height: 0;
   padding: 18px 14px;
   gap: 14px;
+  border-right: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.34);
+  backdrop-filter: blur(26px) saturate(170%);
+  -webkit-backdrop-filter: blur(26px) saturate(170%);
 }
 
 .manager-title {
@@ -249,29 +353,45 @@ html, body {
 .settings-field input,
 .form-grid input,
 .form-grid select,
-.form-grid textarea {
+.form-grid textarea,
+.tree-field input,
+.tree-field select,
+.tree-field textarea {
   width: 100%;
   border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.72);
   color: #37352f;
-  font: inherit;
   outline: none;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   transition: border-color 0.15s ease, background-color 0.15s ease;
+
+  /*
+   * Field labels are uppercase 11px bold, and font-size, font-weight,
+   * letter-spacing, and text-transform all inherit into the control they wrap.
+   * Set them outright so typed text reads as body text, not as a label.
+   */
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .manager-search,
 .lookup-bar input,
 .settings-field input,
 .form-grid input,
-.form-grid select {
+.form-grid select,
+.tree-field input,
+.tree-field select {
   height: 34px;
   padding: 0 10px;
 }
 
-.form-grid select {
+.form-grid select,
+.tree-field select {
   appearance: none;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
     linear-gradient(135deg, currentColor 50%, transparent 50%);
@@ -285,11 +405,19 @@ html, body {
   padding-right: 30px;
 }
 
-.form-grid textarea {
+.form-grid textarea,
+.tree-field textarea {
   resize: vertical;
-  min-height: 78px;
   padding: 9px 10px;
   line-height: 1.45;
+}
+
+.form-grid textarea {
+  min-height: 78px;
+}
+
+.tree-field textarea {
+  min-height: 56px;
 }
 
 .manager-search:focus,
@@ -297,9 +425,19 @@ html, body {
 .settings-field input:focus,
 .form-grid input:focus,
 .form-grid select:focus,
-.form-grid textarea:focus {
+.form-grid textarea:focus,
+.tree-field input:focus,
+.tree-field select:focus,
+.tree-field textarea:focus {
   border-color: rgba(55, 53, 47, 0.36);
   background: rgba(255, 255, 255, 0.84);
+}
+
+.form-grid input::placeholder,
+.form-grid textarea::placeholder,
+.tree-field input::placeholder,
+.tree-field textarea::placeholder {
+  color: #a5a49f;
 }
 
 .word-list {
@@ -344,7 +482,7 @@ html, body {
 }
 
 .word-row small {
-  max-width: 72px;
+  max-width: 56px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -363,12 +501,13 @@ html, body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   overflow: auto;
-  padding: 30px 32px;
+  padding: 28px 30px;
   gap: 18px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0.2)),
-    rgba(246, 246, 244, 0.72);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.12)),
+    rgba(246, 246, 244, 0.54);
 }
 
 .editor-header {
@@ -402,7 +541,8 @@ html, body {
 
 .form-grid {
   display: grid;
-  grid-template-columns: 1fr 160px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
   gap: 14px;
 }
 
@@ -420,6 +560,147 @@ html, body {
 
 .form-grid .wide {
   grid-column: 1 / -1;
+}
+
+.word-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.source-badge {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(55, 53, 47, 0.08);
+  color: #37352f;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.source-badge.source-cambridge {
+  background: rgba(41, 98, 255, 0.12);
+  color: #1f4bd8;
+}
+
+.source-badge.source-dictionaryapi {
+  background: rgba(217, 115, 13, 0.14);
+  color: #9a5b06;
+}
+
+.tree-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tree-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.tree-entry-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.tree-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.tree-group-header {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+/* Definition and examples stack: side by side leaves each textarea too narrow. */
+.tree-definition {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 12px;
+  border-left: 2px solid rgba(55, 53, 47, 0.12);
+}
+
+.tree-definition-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #787774;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tree-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: #787774;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tree-field.wide {
+  flex: 1;
+}
+
+.tree-add {
+  align-self: flex-start;
+}
+
+/* Match the control height so Remove lines up with the fields beside it. */
+.tree-entry-header .tree-remove,
+.tree-group-header .tree-remove {
+  height: 34px;
+}
+
+.tree-add,
+.tree-remove {
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #37352f;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tree-remove {
+  color: #b3261e;
+}
+
+.tree-add:hover,
+.tree-remove:hover {
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.tree-add:disabled,
+.tree-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
 }
 
 .settings-field {
@@ -634,6 +915,10 @@ html, body {
     color: #9b9a97;
   }
 
+  .word-pronunciation {
+    color: #9b9a97;
+  }
+
   .example-text {
     color: #e3e2e0;
   }
@@ -676,9 +961,30 @@ html, body {
   }
 
   .manager-shell {
-    background: #2f2e2c;
+    background: transparent;
     color: #e3e2e0;
     color-scheme: dark;
+  }
+
+  .manager-window {
+    background: transparent;
+  }
+
+  .manager-toolbar {
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .manager-toolbar-title {
+    color: #c5c4c0;
+  }
+
+  .manager-toolbar-title span {
+    color: #f0efec;
+  }
+
+  .manager-toolbar-title small {
+    color: #a7a6a2;
   }
 
   .settings-shell {
@@ -690,12 +996,16 @@ html, body {
   }
 
   .manager-sidebar {
-    background: rgba(38, 37, 35, 0.92);
+    background: rgba(38, 37, 35, 0.5);
     border-right-color: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(26px) saturate(170%);
+    -webkit-backdrop-filter: blur(26px) saturate(170%);
   }
 
   .manager-title,
   .word-row,
+  .source-badge,
+  .tree-add,
   .editor-header h1 {
     color: #e3e2e0;
   }
@@ -713,13 +1023,17 @@ html, body {
   .settings-field input,
   .form-grid input,
   .form-grid select,
-  .form-grid textarea {
+  .form-grid textarea,
+  .tree-field input,
+  .tree-field select,
+  .tree-field textarea {
     background: rgba(255, 255, 255, 0.09);
     color: #e3e2e0;
     border-color: rgba(255, 255, 255, 0.14);
   }
 
-  .form-grid select option {
+  .form-grid select option,
+  .tree-field select option {
     background: #2f2e2c;
     color: #e3e2e0;
   }
@@ -735,7 +1049,10 @@ html, body {
   .settings-field input:focus,
   .form-grid input:focus,
   .form-grid select:focus,
-  .form-grid textarea:focus {
+  .form-grid textarea:focus,
+  .tree-field input:focus,
+  .tree-field select:focus,
+  .tree-field textarea:focus {
     border-color: rgba(255, 255, 255, 0.34);
     background: rgba(255, 255, 255, 0.12);
   }
@@ -768,10 +1085,73 @@ html, body {
     color: #e3e2e0;
   }
 
+  .tree-entry {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .tree-group {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .tree-definition {
+    border-left-color: rgba(255, 255, 255, 0.16);
+  }
+
+  .tree-field,
+  .tree-definition-header {
+    color: #9b9a97;
+  }
+
+  .form-grid input::placeholder,
+  .form-grid textarea::placeholder,
+  .tree-field input::placeholder,
+  .tree-field textarea::placeholder {
+    color: rgba(227, 226, 224, 0.46);
+  }
+
+  .tree-add,
+  .tree-remove {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+
+  .tree-remove {
+    color: #f0b5a3;
+  }
+
+  .tree-add:hover,
+  .tree-remove:hover {
+    background: rgba(255, 255, 255, 0.13);
+  }
+
+  .source-badge {
+    background: rgba(255, 255, 255, 0.09);
+  }
+
+  .source-badge.source-cambridge {
+    background: rgba(126, 164, 255, 0.18);
+    color: #b9ccff;
+  }
+
+  .source-badge.source-dictionaryapi {
+    background: rgba(240, 173, 78, 0.18);
+    color: #f2c98a;
+  }
+
+  .guide-word {
+    color: rgba(227, 226, 224, 0.7);
+  }
+
+  .card-position {
+    color: rgba(227, 226, 224, 0.5);
+  }
+
   .manager-editor {
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
-      rgba(63, 62, 59, 0.72);
+      rgba(63, 62, 59, 0.44);
   }
 
   .danger-btn {

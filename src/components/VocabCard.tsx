@@ -1,37 +1,57 @@
 import React from 'react';
-import { VocabWord } from '../types';
+import { VocabCardData } from '../types';
 
 interface VocabCardProps {
-  word: VocabWord;
+  card: VocabCardData;
   onNext: () => void;
   onPrevious: () => void;
   onRandom: () => void;
   onManage: () => void;
 }
 
-export const VocabCard: React.FC<VocabCardProps> = ({ 
-  word, 
-  onNext, 
-  onPrevious, 
+export const VocabCard: React.FC<VocabCardProps> = ({
+  card,
+  onNext,
+  onPrevious,
   onRandom,
   onManage
 }) => {
+  const pronunciation = card.pronUk || card.pronUs;
+
   return (
     <div className="vocab-card">
       <div className="word-header">
-        <h1 className="word">{word.word}</h1>
-        <span className="category">{word.category}</span>
+        <div className="word-title">
+          <h1 className="word">{card.word}</h1>
+          {pronunciation && (
+            <p className="word-pronunciation">{pronunciation}</p>
+          )}
+        </div>
+        <span className="category">{card.partOfSpeech}</span>
       </div>
-      
+
+      <div className="card-meta">
+        {card.guideWord && <span className="guide-word">{card.guideWord}</span>}
+        {card.total > 1 && (
+          <span className="card-position">
+            {card.position} of {card.total}
+          </span>
+        )}
+      </div>
+
       <div className="meaning">
-        <p>{word.meaning}</p>
+        <p>{card.definition}</p>
       </div>
-      
-      <div className="example">
-        <h3>Example:</h3>
-        <p className="example-text">"{word.example}"</p>
-      </div>
-      
+
+      {card.examples.length > 0 && (
+        <div className="example">
+          <h3>Example:</h3>
+          {card.examples.map((example, index) => (
+            <p className="example-text" key={index}>"{example}"</p>
+          ))}
+        </div>
+      )}
+
       <div className="controls">
         <button onClick={onPrevious} className="control-btn">
           ← Previous

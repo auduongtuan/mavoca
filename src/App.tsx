@@ -9,14 +9,14 @@ import { SettingsPanel } from './components/SettingsPanel';
 import "./App.css";
 
 function LearningApp() {
-  const { 
-    currentWord, 
-    loading, 
-    error, 
-    getRandomWord, 
-    getNextWord, 
-    getPreviousWord, 
-    reload 
+  const {
+    card,
+    loading,
+    error,
+    getRandomWord,
+    getNextWord,
+    getPreviousWord,
+    reload
   } = useVocab();
 
   if (loading) {
@@ -27,14 +27,14 @@ function LearningApp() {
     return <ErrorState message={error} onRetry={reload} />;
   }
 
-  if (!currentWord) {
+  if (!card) {
     return <ErrorState message="No vocabulary words found" onRetry={reload} />;
   }
 
   return (
     <main className="app">
       <VocabCard
-        word={currentWord}
+        card={card}
         onNext={getNextWord}
         onPrevious={getPreviousWord}
         onRandom={getRandomWord}

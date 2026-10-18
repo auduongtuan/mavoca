@@ -37,10 +37,16 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 13
+        },
         "alwaysOnTop": false,
         "skipTaskbar": false,
         "visible": false,
-        "transparent": false,
+        "transparent": true,
         "shadow": true,
         "center": true
       },

@@ -1,7 +1,9 @@
-use reqwest::blocking::Client;
+mod dictionary;
+mod model;
+
 use rusqlite::{params, Connection, OptionalExtension};
-use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -11,21 +13,15 @@ use tauri::{
     Emitter, Manager, Runtime,
 };
 
+use model::{
+    build_cards, count_definitions, entries_to_rows, rows_to_entries, DefinitionRow, VocabCard,
+    VocabEntry, VocabSenseGroup, VocabTreeInput, VocabWord, WordSource,
+};
+
 const BACKUP_PATH_SETTING: &str = "backup_path";
 const TRAY_OPEN_MANAGER_ID: &str = "open-manager";
 const TRAY_OPEN_SETTINGS_ID: &str = "open-settings";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VocabWord {
-    id: i64,
-    word: String,
-    meaning: String,
-    example: String,
-    category: String,
-    created_at: String,
-    updated_at: String,
-}
+const AUTO_ROTATION_INTERVAL_SECS: u64 = 10;
 
 #[derive(Debug, Clone, Deserialize)]
 struct SeedVocabWord {
@@ -33,14 +29,7 @@ struct SeedVocabWord {
     meaning: String,
     example: String,
     category: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct VocabInput {
-    word: String,
-    meaning: String,
-    example: String,
-    category: String,
+    pronunciation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +42,11 @@ struct AppSettings {
 struct AppState {
     db: Arc<Mutex<Connection>>,
     vocab_list: Arc<Mutex<Vec<VocabWord>>>,
+    /// Flattened rotation list: one element per definition, rebuilt whenever
+    /// the vocabulary changes. `current_index` indexes into this, not into
+    /// `vocab_list`, which is what makes prev/next step definition by
+    /// definition rather than word by word.
+    cards: Arc<Mutex<Vec<VocabCard>>>,
     current_index: Arc<Mutex<usize>>,
     is_window_visible: Arc<Mutex<bool>>,
 }
@@ -66,28 +60,73 @@ fn normalize_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn validate_input(input: &VocabInput) -> Result<VocabInput, String> {
-    let cleaned = VocabInput {
-        word: normalize_text(&input.word),
-        meaning: normalize_text(&input.meaning),
-        example: normalize_text(&input.example),
-        category: normalize_text(&input.category),
-    };
-
-    if cleaned.word.is_empty() {
+/// Cleans a hand-edited tree and rejects the states the schema cannot catch:
+/// an empty word, an entry with no part of speech, and a tree with no
+/// definitions at all. Empty definitions and blank examples are dropped rather
+/// than refused, so a half-filled row in the editor is not an error.
+fn validate_tree_input(input: &VocabTreeInput) -> Result<(String, Vec<VocabEntry>), String> {
+    let word = normalize_text(&input.word);
+    if word.is_empty() {
         return Err("Word is required".into());
     }
-    if cleaned.meaning.is_empty() {
-        return Err("Meaning is required".into());
-    }
-    if cleaned.example.is_empty() {
-        return Err("Example is required".into());
-    }
-    if cleaned.category.is_empty() {
-        return Err("Category is required".into());
+
+    let mut entries = Vec::new();
+    for entry in &input.entries {
+        let part_of_speech = normalize_text(&entry.part_of_speech);
+
+        let mut sense_groups = Vec::new();
+        for group in &entry.sense_groups {
+            let definitions: Vec<_> = group
+                .definitions
+                .iter()
+                .filter_map(|definition| {
+                    let text = normalize_text(&definition.definition);
+                    if text.is_empty() {
+                        return None;
+                    }
+
+                    Some(model::VocabDefinition {
+                        id: definition.id,
+                        definition: text,
+                        examples: definition
+                            .examples
+                            .iter()
+                            .map(|example| normalize_text(example))
+                            .filter(|example| !example.is_empty())
+                            .collect(),
+                    })
+                })
+                .collect();
+
+            if !definitions.is_empty() {
+                sense_groups.push(VocabSenseGroup {
+                    guide_word: normalize_text(&group.guide_word),
+                    definitions,
+                });
+            }
+        }
+
+        if sense_groups.is_empty() {
+            continue;
+        }
+
+        if part_of_speech.is_empty() {
+            return Err("Every entry needs a part of speech".into());
+        }
+
+        entries.push(VocabEntry {
+            part_of_speech,
+            pron_uk: normalize_text(&entry.pron_uk),
+            pron_us: normalize_text(&entry.pron_us),
+            sense_groups,
+        });
     }
 
-    Ok(cleaned)
+    if entries.is_empty() {
+        return Err("At least one definition is required".into());
+    }
+
+    Ok((word, entries))
 }
 
 fn init_database(app: &tauri::AppHandle) -> Result<Connection, String> {
@@ -102,17 +141,47 @@ fn init_database(app: &tauri::AppHandle) -> Result<Connection, String> {
     let conn =
         Connection::open(db_path).map_err(|err| format!("Failed to open database: {err}"))?;
 
+    // Without this the ON DELETE CASCADE below never fires and deleting a word
+    // silently leaves its definitions behind.
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|err| format!("Failed to enable foreign keys: {err}"))?;
+
+    create_schema(&conn)?;
+    migrate_legacy_vocabs(&conn)?;
+    ensure_default_settings(&conn)?;
+    seed_if_empty(&conn)?;
+
+    Ok(conn)
+}
+
+/// On a fresh database this creates the current shape. On a legacy one the
+/// `vocabs` statement is a no-op and migrate_legacy_vocabs reshapes it.
+fn create_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS vocabs (
             id INTEGER PRIMARY KEY,
             word TEXT NOT NULL UNIQUE COLLATE NOCASE,
-            meaning TEXT NOT NULL,
-            example TEXT NOT NULL,
-            category TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS vocab_definitions (
+            id INTEGER PRIMARY KEY,
+            vocab_id INTEGER NOT NULL REFERENCES vocabs(id) ON DELETE CASCADE,
+            entry_index INTEGER NOT NULL,
+            part_of_speech TEXT NOT NULL,
+            pron_uk TEXT NOT NULL DEFAULT '',
+            pron_us TEXT NOT NULL DEFAULT '',
+            guide_word TEXT NOT NULL DEFAULT '',
+            definition TEXT NOT NULL,
+            examples TEXT NOT NULL DEFAULT '[]',
+            sort_order INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_vocab_definitions_vocab
+            ON vocab_definitions (vocab_id, sort_order);
 
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -120,28 +189,193 @@ fn init_database(app: &tauri::AppHandle) -> Result<Connection, String> {
         );
         "#,
     )
-    .map_err(|err| format!("Failed to initialize database: {err}"))?;
+    .map_err(|err| format!("Failed to initialize database: {err}"))
+}
 
-    ensure_default_settings(&conn)?;
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|err| format!("Failed to inspect {table} schema: {err}"))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|err| format!("Failed to read {table} schema: {err}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|err| format!("Failed to decode {table} schema: {err}"))?;
 
+    Ok(columns)
+}
+
+/// Converts the old one-row-per-word shape into the tree, losslessly: the old
+/// `category` becomes the part of speech, `pronunciation` the US pronunciation,
+/// `meaning` the single definition, and `example` its only example.
+///
+/// The whole conversion is one transaction, so a failure leaves the original
+/// data untouched rather than half-migrated.
+fn migrate_legacy_vocabs(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "vocabs")?;
+    if !columns.iter().any(|column| column == "meaning") {
+        return Ok(());
+    }
+
+    struct LegacyRow {
+        id: i64,
+        meaning: String,
+        example: String,
+        category: String,
+        pronunciation: String,
+    }
+
+    let legacy_rows = {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, meaning, example, category, pronunciation
+                FROM vocabs
+                ORDER BY id ASC
+                "#,
+            )
+            .map_err(|err| format!("Failed to prepare legacy vocabulary read: {err}"))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(LegacyRow {
+                    id: row.get(0)?,
+                    meaning: row.get(1)?,
+                    example: row.get(2)?,
+                    category: row.get(3)?,
+                    pronunciation: row.get(4)?,
+                })
+            })
+            .map_err(|err| format!("Failed to read legacy vocabulary: {err}"))?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|err| format!("Failed to decode legacy vocabulary: {err}"))?
+    };
+
+    // SQLite cannot drop the parent of a foreign key while enforcement is on,
+    // and the pragma is a no-op inside a transaction, so it is toggled around
+    // the whole rebuild.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
+        .map_err(|err| format!("Failed to relax foreign keys for migration: {err}"))?;
+
+    let result = (|| -> Result<(), String> {
+        conn.execute_batch("BEGIN")
+            .map_err(|err| format!("Failed to begin migration: {err}"))?;
+
+        for row in &legacy_rows {
+            let category = normalize_text(&row.category);
+            let examples = {
+                let example = normalize_text(&row.example);
+                if example.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![example]
+                }
+            };
+
+            let entries = vec![VocabEntry {
+                part_of_speech: if category.is_empty() {
+                    "unknown".into()
+                } else {
+                    category
+                },
+                pron_uk: String::new(),
+                pron_us: normalize_text(&row.pronunciation),
+                sense_groups: vec![VocabSenseGroup {
+                    guide_word: String::new(),
+                    definitions: vec![model::VocabDefinition {
+                        id: 0,
+                        definition: normalize_text(&row.meaning),
+                        examples,
+                    }],
+                }],
+            }];
+
+            insert_definition_rows(conn, row.id, &entries)?;
+        }
+
+        conn.execute_batch(
+            r#"
+            CREATE TABLE vocabs_migrated (
+                id INTEGER PRIMARY KEY,
+                word TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                source TEXT NOT NULL DEFAULT 'manual',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            INSERT INTO vocabs_migrated (id, word, source, created_at, updated_at)
+            SELECT id, word, 'manual', created_at, updated_at FROM vocabs;
+
+            DROP TABLE vocabs;
+            ALTER TABLE vocabs_migrated RENAME TO vocabs;
+            "#,
+        )
+        .map_err(|err| format!("Failed to rebuild vocabulary table: {err}"))?;
+
+        conn.execute_batch("COMMIT")
+            .map_err(|err| format!("Failed to commit migration: {err}"))?;
+
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|err| format!("Failed to restore foreign keys: {err}"))?;
+
+    result
+}
+
+fn seed_if_empty(conn: &Connection) -> Result<(), String> {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM vocabs", [], |row| row.get(0))
         .map_err(|err| format!("Failed to inspect database: {err}"))?;
 
-    if count == 0 {
-        for seed in load_seed_vocab() {
-            conn.execute(
-                r#"
-                INSERT OR IGNORE INTO vocabs (word, meaning, example, category)
-                VALUES (?1, ?2, ?3, ?4)
-                "#,
-                params![seed.word, seed.meaning, seed.example, seed.category],
+    if count > 0 {
+        return Ok(());
+    }
+
+    for seed in load_seed_vocab() {
+        let category = normalize_text(&seed.category);
+        let example = normalize_text(&seed.example);
+        let entries = vec![VocabEntry {
+            part_of_speech: if category.is_empty() {
+                "unknown".into()
+            } else {
+                category
+            },
+            pron_uk: String::new(),
+            pron_us: normalize_text(&seed.pronunciation.unwrap_or_default()),
+            sense_groups: vec![VocabSenseGroup {
+                guide_word: String::new(),
+                definitions: vec![model::VocabDefinition {
+                    id: 0,
+                    definition: normalize_text(&seed.meaning),
+                    examples: if example.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![example]
+                    },
+                }],
+            }],
+        }];
+
+        let inserted = conn
+            .execute(
+                "INSERT OR IGNORE INTO vocabs (word, source) VALUES (?1, ?2)",
+                params![normalize_text(&seed.word), WordSource::Manual.as_str()],
             )
             .map_err(|err| format!("Failed to seed vocabulary: {err}"))?;
+
+        if inserted > 0 {
+            insert_definition_rows(conn, conn.last_insert_rowid(), &entries)?;
         }
     }
 
-    Ok(conn)
+    Ok(())
 }
 
 fn default_backup_path() -> Option<PathBuf> {
@@ -250,23 +484,158 @@ fn sync_database_backup(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn row_to_vocab(row: &rusqlite::Row<'_>) -> rusqlite::Result<VocabWord> {
-    Ok(VocabWord {
-        id: row.get(0)?,
-        word: row.get(1)?,
-        meaning: row.get(2)?,
-        example: row.get(3)?,
-        category: row.get(4)?,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
-    })
-}
-
-fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
+/// Writes a tree as ordered definition rows. This is the only place
+/// `entry_index` and `sort_order` are assigned, which is what keeps the tree
+/// well-formed given the schema does not enforce it.
+fn insert_definition_rows(
+    conn: &Connection,
+    vocab_id: i64,
+    entries: &[VocabEntry],
+) -> Result<(), String> {
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, word, meaning, example, category, created_at, updated_at
+            INSERT INTO vocab_definitions (
+                vocab_id, entry_index, part_of_speech, pron_uk, pron_us,
+                guide_word, definition, examples, sort_order
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+        )
+        .map_err(|err| format!("Failed to prepare definition insert: {err}"))?;
+
+    for (sort_order, row) in entries_to_rows(entries).into_iter().enumerate() {
+        let examples = serde_json::to_string(&row.examples)
+            .map_err(|err| format!("Failed to encode examples: {err}"))?;
+
+        stmt.execute(params![
+            vocab_id,
+            row.entry_index,
+            row.part_of_speech,
+            row.pron_uk,
+            row.pron_us,
+            row.guide_word,
+            row.definition,
+            examples,
+            sort_order as i64
+        ])
+        .map_err(|err| format!("Failed to save definition: {err}"))?;
+    }
+
+    Ok(())
+}
+
+/// Replaces a word's definitions wholesale. Both importing and hand-editing go
+/// through here, so a word's tree is never partially updated.
+fn replace_word_definitions(
+    conn: &Connection,
+    vocab_id: i64,
+    entries: &[VocabEntry],
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM vocab_definitions WHERE vocab_id = ?1",
+        params![vocab_id],
+    )
+    .map_err(|err| format!("Failed to clear existing definitions: {err}"))?;
+
+    insert_definition_rows(conn, vocab_id, entries)
+}
+
+fn definition_row_from_sql(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<DefinitionRow> {
+    let examples: String = row.get(offset + 7)?;
+
+    Ok(DefinitionRow {
+        id: row.get(offset)?,
+        entry_index: row.get(offset + 1)?,
+        part_of_speech: row.get(offset + 2)?,
+        pron_uk: row.get(offset + 3)?,
+        pron_us: row.get(offset + 4)?,
+        guide_word: row.get(offset + 5)?,
+        definition: row.get(offset + 6)?,
+        examples: serde_json::from_str(&examples).unwrap_or_default(),
+    })
+}
+
+fn definition_rows_for(conn: &Connection, vocab_id: i64) -> Result<Vec<DefinitionRow>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id, entry_index, part_of_speech, pron_uk, pron_us,
+                   guide_word, definition, examples
+            FROM vocab_definitions
+            WHERE vocab_id = ?1
+            ORDER BY sort_order ASC
+            "#,
+        )
+        .map_err(|err| format!("Failed to prepare definition query: {err}"))?;
+
+    let rows = stmt
+        .query_map(params![vocab_id], |row| definition_row_from_sql(row, 0))
+        .map_err(|err| format!("Failed to read definitions: {err}"))?;
+
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|err| format!("Failed to decode definitions: {err}"))
+}
+
+fn build_word(
+    id: i64,
+    word: String,
+    source: String,
+    created_at: String,
+    updated_at: String,
+    rows: Vec<DefinitionRow>,
+) -> VocabWord {
+    let entries = rows_to_entries(rows);
+
+    VocabWord {
+        id,
+        word,
+        source: WordSource::from_str(&source),
+        definition_count: count_definitions(&entries),
+        entries,
+        created_at,
+        updated_at,
+    }
+}
+
+fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
+    let mut definitions_by_word: HashMap<i64, Vec<DefinitionRow>> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT vocab_id, id, entry_index, part_of_speech, pron_uk, pron_us,
+                       guide_word, definition, examples
+                FROM vocab_definitions
+                ORDER BY vocab_id ASC, sort_order ASC
+                "#,
+            )
+            .map_err(|err| format!("Failed to prepare definition query: {err}"))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let vocab_id: i64 = row.get(0)?;
+                Ok((vocab_id, definition_row_from_sql(row, 1)?))
+            })
+            .map_err(|err| format!("Failed to read definitions: {err}"))?;
+
+        for row in rows {
+            let (vocab_id, definition) =
+                row.map_err(|err| format!("Failed to decode definitions: {err}"))?;
+            definitions_by_word
+                .entry(vocab_id)
+                .or_default()
+                .push(definition);
+        }
+    }
+
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id, word, source, created_at, updated_at
             FROM vocabs
             ORDER BY lower(word) ASC
             "#,
@@ -274,58 +643,102 @@ fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
         .map_err(|err| format!("Failed to prepare vocabulary query: {err}"))?;
 
     let rows = stmt
-        .query_map([], row_to_vocab)
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
         .map_err(|err| format!("Failed to read vocabulary: {err}"))?;
 
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|err| format!("Failed to decode vocabulary: {err}"))
+    let mut words = Vec::new();
+    for row in rows {
+        let (id, word, source, created_at, updated_at) =
+            row.map_err(|err| format!("Failed to decode vocabulary: {err}"))?;
+        let definitions = definitions_by_word.remove(&id).unwrap_or_default();
+        words.push(build_word(
+            id,
+            word,
+            source,
+            created_at,
+            updated_at,
+            definitions,
+        ));
+    }
+
+    Ok(words)
 }
 
 fn get_vocab_by_id(conn: &Connection, id: i64) -> Result<Option<VocabWord>, String> {
-    conn.query_row(
-        r#"
-        SELECT id, word, meaning, example, category, created_at, updated_at
-        FROM vocabs
-        WHERE id = ?1
-        "#,
-        params![id],
-        row_to_vocab,
-    )
-    .optional()
-    .map_err(|err| format!("Failed to read vocabulary word: {err}"))
+    let header = conn
+        .query_row(
+            "SELECT id, word, source, created_at, updated_at FROM vocabs WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|err| format!("Failed to read vocabulary word: {err}"))?;
+
+    let Some((id, word, source, created_at, updated_at)) = header else {
+        return Ok(None);
+    };
+
+    let rows = definition_rows_for(conn, id)?;
+    Ok(Some(build_word(
+        id, word, source, created_at, updated_at, rows,
+    )))
 }
 
-fn get_vocab_by_word(conn: &Connection, word: &str) -> Result<Option<VocabWord>, String> {
+fn get_vocab_id_by_word(conn: &Connection, word: &str) -> Result<Option<i64>, String> {
     conn.query_row(
-        r#"
-        SELECT id, word, meaning, example, category, created_at, updated_at
-        FROM vocabs
-        WHERE word = ?1 COLLATE NOCASE
-        "#,
+        "SELECT id FROM vocabs WHERE word = ?1 COLLATE NOCASE",
         params![word],
-        row_to_vocab,
+        |row| row.get(0),
     )
     .optional()
     .map_err(|err| format!("Failed to read vocabulary word: {err}"))
 }
 
+/// Rebuilds the word list and the flattened rotation list, keeping the popup on
+/// the same definition where possible. When that definition is gone, it falls
+/// back to the same word, then to the start.
 fn refresh_vocab_cache(state: &AppState) -> Result<Vec<VocabWord>, String> {
     let list = {
         let conn = state.db.lock().unwrap();
         list_vocab_from_db(&conn)?
     };
+    let cards = build_cards(&list);
 
-    let previous_current_id = {
-        let vocab_list = state.vocab_list.lock().unwrap();
+    let previous = {
+        let existing = state.cards.lock().unwrap();
         let current_index = *state.current_index.lock().unwrap();
-        vocab_list.get(current_index).map(|word| word.id)
+        existing
+            .get(current_index)
+            .map(|card| (card.vocab_id, card.position))
     };
 
-    let next_index = previous_current_id
-        .and_then(|id| list.iter().position(|word| word.id == id))
+    let next_index = previous
+        .and_then(|(vocab_id, position)| {
+            cards
+                .iter()
+                .position(|card| card.vocab_id == vocab_id && card.position == position)
+                .or_else(|| cards.iter().position(|card| card.vocab_id == vocab_id))
+        })
         .unwrap_or(0);
 
     *state.vocab_list.lock().unwrap() = list.clone();
+    *state.cards.lock().unwrap() = cards;
     *state.current_index.lock().unwrap() = next_index;
 
     Ok(list)
@@ -336,10 +749,24 @@ fn sync_backup_from_state(state: &AppState) -> Result<(), String> {
     sync_database_backup(&conn)
 }
 
-fn current_word(state: &AppState) -> Option<VocabWord> {
-    let vocab_list = state.vocab_list.lock().unwrap();
+fn current_card(state: &AppState) -> Option<VocabCard> {
+    let cards = state.cards.lock().unwrap();
     let index = *state.current_index.lock().unwrap();
-    vocab_list.get(index).cloned()
+    cards.get(index).cloned()
+}
+
+/// Moves the rotation to `index` and tells the popup and tray about it.
+fn apply_card_index(app: &tauri::AppHandle, state: &AppState, index: usize) -> Option<VocabCard> {
+    let card = {
+        let cards = state.cards.lock().unwrap();
+        cards.get(index).cloned()
+    }?;
+
+    *state.current_index.lock().unwrap() = index;
+    update_tray_title(app, &card.word);
+    let _ = app.emit("vocab-changed", card.clone());
+
+    Some(card)
 }
 
 fn sync_after_vocab_change(
@@ -348,9 +775,9 @@ fn sync_after_vocab_change(
 ) -> Result<Vec<VocabWord>, String> {
     let list = refresh_vocab_cache(state)?;
 
-    if let Some(word) = current_word(state) {
-        update_tray_title(app, &word.word);
-        let _ = app.emit("vocab-changed", word);
+    if let Some(card) = current_card(state) {
+        update_tray_title(app, &card.word);
+        let _ = app.emit("vocab-changed", card);
     } else {
         update_tray_title(app, "");
         let _ = app.emit("vocab-empty", ());
@@ -368,146 +795,72 @@ fn update_tray_title(app: &tauri::AppHandle, word: &str) {
     }
 }
 
-fn selector(query: &str) -> Result<Selector, String> {
-    Selector::parse(query).map_err(|_| format!("Invalid selector: {query}"))
-}
-
-fn first_text_in(
-    element: scraper::ElementRef<'_>,
-    selector_query: &str,
-) -> Result<Option<String>, String> {
-    let selector = selector(selector_query)?;
-    Ok(element
-        .select(&selector)
-        .next()
-        .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
-        .filter(|text| !text.is_empty()))
-}
-
-fn lookup_cambridge_word(word: &str) -> Result<VocabInput, String> {
-    let clean_word = normalize_text(word);
-    if clean_word.is_empty() {
-        return Err("Enter a word to look up".into());
-    }
-
-    let lookup_path = clean_word.to_lowercase().replace(' ', "-");
-    let encoded_word = urlencoding::encode(&lookup_path);
-    let url = format!("https://dictionary.cambridge.org/us/dictionary/english/{encoded_word}");
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) VocabLearning/0.1")
-        .timeout(Duration::from_secs(12))
-        .build()
-        .map_err(|err| format!("Failed to create dictionary client: {err}"))?;
-
-    let response = client
-        .get(url)
-        .send()
-        .map_err(|err| format!("Failed to reach Cambridge Dictionary: {err}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Cambridge Dictionary returned HTTP {}",
-            response.status()
-        ));
-    }
-
-    let html = response
-        .text()
-        .map_err(|err| format!("Failed to read Cambridge response: {err}"))?;
-    let document = Html::parse_document(&html);
-    let entry_selector = selector(".entry-body__el, .pr.entry-body__el")?;
-    let headword_selector = selector(".hw.dhw")?;
-    let requested = clean_word.to_lowercase();
-
-    for entry in document.select(&entry_selector) {
-        let headword = entry
-            .select(&headword_selector)
-            .next()
-            .map(|node| normalize_text(&node.text().collect::<Vec<_>>().join(" ")))
-            .unwrap_or_default();
-
-        if headword.to_lowercase() != requested {
-            continue;
-        }
-
-        let definition = first_text_in(entry, ".def.ddef_d.db")?
-            .or_else(|| first_text_in(entry, ".def").ok().flatten());
-        let Some(meaning) = definition else {
-            continue;
-        };
-
-        let category = first_text_in(entry, ".pos.dpos")?
-            .or_else(|| first_text_in(entry, ".pos").ok().flatten())
-            .unwrap_or_else(|| "unknown".into());
-        let example = first_text_in(entry, ".examp.dexamp")?
-            .or_else(|| first_text_in(entry, ".eg.deg").ok().flatten())
-            .or_else(|| first_text_in(entry, ".examp").ok().flatten())
-            .unwrap_or_else(|| format!("No example found for {clean_word}."));
-
-        return Ok(VocabInput {
-            word: clean_word,
-            meaning,
-            example,
-            category,
-        });
-    }
-
-    Err(format!("No Cambridge definition found for '{clean_word}'"))
-}
-
 #[tauri::command]
 fn list_vocab_words(state: tauri::State<AppState>) -> Result<Vec<VocabWord>, String> {
     refresh_vocab_cache(&state)
 }
 
 #[tauri::command]
-fn get_current_vocab_word(state: tauri::State<AppState>) -> Option<VocabWord> {
-    current_word(&state)
+fn get_current_vocab_card(state: tauri::State<AppState>) -> Option<VocabCard> {
+    current_card(&state)
+}
+
+/// Steps the rotation by `delta` definitions, wrapping at both ends. This walks
+/// every definition of the current word before crossing into the next word.
+#[tauri::command]
+fn step_vocab_card(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    delta: i32,
+) -> Option<VocabCard> {
+    // Locks are taken one at a time: nothing in this file ever holds `cards`
+    // and `current_index` together.
+    let len = state.cards.lock().unwrap().len();
+    if len == 0 {
+        return None;
+    }
+
+    let current = *state.current_index.lock().unwrap();
+
+    let len_i64 = len as i64;
+    let next = (current as i64 + delta as i64).rem_euclid(len_i64) as usize;
+    apply_card_index(&app, &state, next)
 }
 
 #[tauri::command]
-fn update_current_word_index(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
-    index: usize,
-) -> Result<(), String> {
-    let vocab_list = state.vocab_list.lock().unwrap();
-    if index >= vocab_list.len() {
-        return Err("Vocabulary index is out of range".into());
+fn random_vocab_card(state: tauri::State<AppState>, app: tauri::AppHandle) -> Option<VocabCard> {
+    let len = state.cards.lock().unwrap().len();
+    if len == 0 {
+        return None;
     }
 
-    *state.current_index.lock().unwrap() = index;
-    if let Some(word) = vocab_list.get(index) {
-        update_tray_title(&app, &word.word);
-        let _ = app.emit("vocab-changed", word.clone());
-    }
+    // Cheap, dependency-free jitter: the clock is plenty for shuffling a popup.
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.subsec_nanos() as usize)
+        .unwrap_or(0);
 
-    Ok(())
+    apply_card_index(&app, &state, seed % len)
 }
 
+/// Jumps the rotation to the first definition of `id`.
 #[tauri::command]
 fn set_current_vocab_id(
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
     id: i64,
 ) -> Result<(), String> {
-    let vocab_list = state.vocab_list.lock().unwrap();
-    let Some(index) = vocab_list.iter().position(|word| word.id == id) else {
+    let index = {
+        let cards = state.cards.lock().unwrap();
+        cards.iter().position(|card| card.vocab_id == id)
+    };
+
+    let Some(index) = index else {
         return Err("Vocabulary word was not found".into());
     };
 
-    *state.current_index.lock().unwrap() = index;
-    if let Some(word) = vocab_list.get(index) {
-        update_tray_title(&app, &word.word);
-        let _ = app.emit("vocab-changed", word.clone());
-    }
-
+    apply_card_index(&app, &state, index);
     Ok(())
-}
-
-#[tauri::command]
-fn lookup_vocab_word(word: String) -> Result<VocabInput, String> {
-    lookup_cambridge_word(&word)
 }
 
 #[tauri::command]
@@ -527,63 +880,139 @@ fn update_settings(
     load_settings_from_db(&conn)
 }
 
-#[tauri::command]
-fn create_vocab(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
-    input: VocabInput,
-) -> Result<VocabWord, String> {
-    let cleaned = validate_input(&input)?;
-    let word = {
-        let conn = state.db.lock().unwrap();
-        if let Some(existing) = get_vocab_by_word(&conn, &cleaned.word)? {
-            conn.execute(
-                r#"
-                UPDATE vocabs
-                SET meaning = ?1, example = ?2, category = ?3, updated_at = datetime('now')
-                WHERE id = ?4
-                "#,
-                params![
-                    cleaned.meaning,
-                    cleaned.example,
-                    cleaned.category,
-                    existing.id
-                ],
-            )
-            .map_err(|err| format!("Failed to update existing vocabulary: {err}"))?;
-            get_vocab_by_id(&conn, existing.id)?
-                .ok_or_else(|| "Updated word was not found".to_string())?
-        } else {
-            conn.execute(
-                r#"
-                INSERT INTO vocabs (word, meaning, example, category)
-                VALUES (?1, ?2, ?3, ?4)
-                "#,
-                params![
-                    cleaned.word,
-                    cleaned.meaning,
-                    cleaned.example,
-                    cleaned.category
-                ],
+/// Writes a word row plus its whole tree in one transaction, so a word is never
+/// left with a half-written set of definitions.
+fn save_word_tree(
+    conn: &Connection,
+    id: Option<i64>,
+    word: &str,
+    source: WordSource,
+    entries: &[VocabEntry],
+) -> Result<i64, String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|err| format!("Failed to start save: {err}"))?;
+
+    let vocab_id = match id {
+        Some(id) => {
+            let updated = tx
+                .execute(
+                    r#"
+                    UPDATE vocabs
+                    SET word = ?1, source = ?2, updated_at = datetime('now')
+                    WHERE id = ?3
+                    "#,
+                    params![word, source.as_str(), id],
+                )
+                .map_err(|err| format!("Failed to update vocabulary: {err}"))?;
+
+            if updated == 0 {
+                return Err("Vocabulary word was not found".into());
+            }
+
+            id
+        }
+        None => {
+            tx.execute(
+                "INSERT INTO vocabs (word, source) VALUES (?1, ?2)",
+                params![word, source.as_str()],
             )
             .map_err(|err| format!("Failed to create vocabulary: {err}"))?;
-            let id = conn.last_insert_rowid();
-            get_vocab_by_id(&conn, id)?.ok_or_else(|| "Created word was not found".to_string())?
+
+            tx.last_insert_rowid()
         }
     };
 
-    sync_after_vocab_change(&app, &state)?;
-    Ok(word)
+    replace_word_definitions(&tx, vocab_id, entries)?;
+
+    tx.commit()
+        .map_err(|err| format!("Failed to commit save: {err}"))?;
+
+    Ok(vocab_id)
 }
 
+/// Adds a word by fetching it and importing every definition, no picker.
+/// Cambridge is tried first; the fetch layer falls back on its own.
 #[tauri::command]
-fn add_vocab_from_cambridge(
+fn add_vocab_word(
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
     word: String,
 ) -> Result<VocabWord, String> {
-    let input = lookup_cambridge_word(&word)?;
-    create_vocab(state, app, input)
+    let clean_word = normalize_text(&word);
+    if clean_word.is_empty() {
+        return Err("Enter a word to add".into());
+    }
+
+    {
+        let conn = state.db.lock().unwrap();
+        if get_vocab_id_by_word(&conn, &clean_word)?.is_some() {
+            return Err(format!("'{clean_word}' is already in your vocabulary"));
+        }
+    }
+
+    // Fetched before taking the database lock: this is a network call and must
+    // not block the popup or the tray.
+    let fetched = dictionary::fetch_word(&clean_word)?;
+
+    let saved = {
+        let conn = state.db.lock().unwrap();
+        let id = save_word_tree(&conn, None, &clean_word, fetched.source, &fetched.entries)?;
+        get_vocab_by_id(&conn, id)?.ok_or_else(|| "Created word was not found".to_string())?
+    };
+
+    sync_after_vocab_change(&app, &state)?;
+    Ok(saved)
+}
+
+/// Re-fetches a word and replaces its definitions, used by the manager's
+/// Refresh button to enrich entries that were migrated or hand-written.
+#[tauri::command]
+fn refresh_vocab_word(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    id: i64,
+) -> Result<VocabWord, String> {
+    let existing_word = {
+        let conn = state.db.lock().unwrap();
+        get_vocab_by_id(&conn, id)?.ok_or_else(|| "Vocabulary word was not found".to_string())?
+    };
+
+    let fetched = dictionary::fetch_word(&existing_word.word)?;
+
+    let saved = {
+        let conn = state.db.lock().unwrap();
+        save_word_tree(
+            &conn,
+            Some(id),
+            &existing_word.word,
+            fetched.source,
+            &fetched.entries,
+        )?;
+        get_vocab_by_id(&conn, id)?.ok_or_else(|| "Refreshed word was not found".to_string())?
+    };
+
+    sync_after_vocab_change(&app, &state)?;
+    Ok(saved)
+}
+
+#[tauri::command]
+fn create_vocab(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    input: VocabTreeInput,
+) -> Result<VocabWord, String> {
+    let (word, entries) = validate_tree_input(&input)?;
+
+    let saved = {
+        let conn = state.db.lock().unwrap();
+        let existing_id = get_vocab_id_by_word(&conn, &word)?;
+        let id = save_word_tree(&conn, existing_id, &word, WordSource::Manual, &entries)?;
+        get_vocab_by_id(&conn, id)?.ok_or_else(|| "Created word was not found".to_string())?
+    };
+
+    sync_after_vocab_change(&app, &state)?;
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -591,32 +1020,18 @@ fn update_vocab(
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
     id: i64,
-    input: VocabInput,
+    input: VocabTreeInput,
 ) -> Result<VocabWord, String> {
-    let cleaned = validate_input(&input)?;
-    let word = {
-        let conn = state.db.lock().unwrap();
-        conn.execute(
-            r#"
-            UPDATE vocabs
-            SET word = ?1, meaning = ?2, example = ?3, category = ?4, updated_at = datetime('now')
-            WHERE id = ?5
-            "#,
-            params![
-                cleaned.word,
-                cleaned.meaning,
-                cleaned.example,
-                cleaned.category,
-                id
-            ],
-        )
-        .map_err(|err| format!("Failed to update vocabulary: {err}"))?;
+    let (word, entries) = validate_tree_input(&input)?;
 
+    let saved = {
+        let conn = state.db.lock().unwrap();
+        save_word_tree(&conn, Some(id), &word, WordSource::Manual, &entries)?;
         get_vocab_by_id(&conn, id)?.ok_or_else(|| "Vocabulary word was not found".to_string())?
     };
 
     sync_after_vocab_change(&app, &state)?;
-    Ok(word)
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -746,23 +1161,22 @@ fn position_popup_at_click(
     Ok(())
 }
 
+/// Advances one definition at a time while the popup is hidden.
 fn start_auto_rotation(app: tauri::AppHandle, state: AppState) {
     std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(10));
+        std::thread::sleep(Duration::from_secs(AUTO_ROTATION_INTERVAL_SECS));
 
-        let is_visible = *state.is_window_visible.lock().unwrap();
-        if !is_visible {
-            let mut index = state.current_index.lock().unwrap();
-            let vocab_list = state.vocab_list.lock().unwrap();
-
-            if !vocab_list.is_empty() {
-                *index = (*index + 1) % vocab_list.len();
-                if let Some(word) = vocab_list.get(*index) {
-                    update_tray_title(&app, &word.word);
-                    let _ = app.emit("vocab-changed", word.clone());
-                }
-            }
+        if *state.is_window_visible.lock().unwrap() {
+            continue;
         }
+
+        let len = state.cards.lock().unwrap().len();
+        if len == 0 {
+            continue;
+        }
+
+        let index = *state.current_index.lock().unwrap();
+        apply_card_index(&app, &state, (index + 1) % len);
     });
 }
 
@@ -794,14 +1208,15 @@ pub fn run() {
             show_manager_window,
             show_settings_window,
             list_vocab_words,
-            get_current_vocab_word,
-            update_current_word_index,
+            get_current_vocab_card,
+            step_vocab_card,
+            random_vocab_card,
             set_current_vocab_id,
-            lookup_vocab_word,
             get_settings,
             update_settings,
+            add_vocab_word,
+            refresh_vocab_word,
             create_vocab,
-            add_vocab_from_cambridge,
             update_vocab,
             delete_vocab
         ])
@@ -810,15 +1225,17 @@ pub fn run() {
 
             let conn = init_database(app.handle())?;
             let initial_vocab = list_vocab_from_db(&conn)?;
+            let initial_cards = build_cards(&initial_vocab);
             let app_state = AppState {
                 db: Arc::new(Mutex::new(conn)),
                 vocab_list: Arc::new(Mutex::new(initial_vocab)),
+                cards: Arc::new(Mutex::new(initial_cards)),
                 current_index: Arc::new(Mutex::new(0)),
                 is_window_visible: Arc::new(Mutex::new(false)),
             };
 
-            if let Some(word) = current_word(&app_state) {
-                update_tray_title(app.handle(), &word.word);
+            if let Some(card) = current_card(&app_state) {
+                update_tray_title(app.handle(), &card.word);
             }
 
             sync_backup_from_state(&app_state)?;
@@ -865,6 +1282,22 @@ pub fn run() {
                 });
             }
 
+            if let Some(window) = app.get_webview_window("manager") {
+                #[cfg(target_os = "macos")]
+                {
+                    use window_vibrancy::{
+                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                    };
+
+                    let _ = apply_vibrancy(
+                        &window,
+                        NSVisualEffectMaterial::Sidebar,
+                        Some(NSVisualEffectState::Active),
+                        None,
+                    );
+                }
+            }
+
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -906,4 +1339,391 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a database in the pre-multi-meaning shape, the one an existing
+    /// install actually has on disk.
+    fn legacy_database() -> Connection {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE vocabs (
+                id INTEGER PRIMARY KEY,
+                word TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                meaning TEXT NOT NULL,
+                example TEXT NOT NULL,
+                category TEXT NOT NULL,
+                pronunciation TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            INSERT INTO vocabs (word, meaning, example, category, pronunciation)
+            VALUES
+                ('serendipity', 'finding good things by chance',
+                 'A serendipity of timing.', 'noun', '/ser.an.dip.a.ti/'),
+                ('ephemeral', 'lasting a very short time',
+                 'Fame is ephemeral.', 'adjective', '');
+            "#,
+        )
+        .expect("legacy schema");
+        conn
+    }
+
+    #[test]
+    fn migration_preserves_existing_words_losslessly() {
+        let conn = legacy_database();
+        create_schema(&conn).expect("schema");
+        migrate_legacy_vocabs(&conn).expect("migration");
+
+        let words = list_vocab_from_db(&conn).expect("read");
+        assert_eq!(words.len(), 2);
+
+        let serendipity = words
+            .iter()
+            .find(|word| word.word == "serendipity")
+            .expect("migrated word");
+        assert_eq!(serendipity.source, WordSource::Manual);
+        assert_eq!(serendipity.definition_count, 1);
+        assert_eq!(serendipity.entries.len(), 1);
+
+        let entry = &serendipity.entries[0];
+        assert_eq!(entry.part_of_speech, "noun");
+        assert_eq!(entry.pron_us, "/ser.an.dip.a.ti/");
+        assert_eq!(entry.sense_groups.len(), 1);
+        assert_eq!(entry.sense_groups[0].guide_word, "");
+
+        let definition = &entry.sense_groups[0].definitions[0];
+        assert_eq!(definition.definition, "finding good things by chance");
+        assert_eq!(definition.examples, vec!["A serendipity of timing."]);
+    }
+
+    #[test]
+    fn migration_drops_legacy_columns_and_is_idempotent() {
+        let conn = legacy_database();
+        create_schema(&conn).expect("schema");
+        migrate_legacy_vocabs(&conn).expect("first migration");
+
+        let columns = table_columns(&conn, "vocabs").expect("columns");
+        assert!(!columns.iter().any(|column| column == "meaning"));
+        assert!(columns.iter().any(|column| column == "source"));
+
+        // A second launch must not duplicate definitions.
+        migrate_legacy_vocabs(&conn).expect("second migration");
+        let words = list_vocab_from_db(&conn).expect("read");
+        assert_eq!(words.len(), 2);
+        assert!(words.iter().all(|word| word.definition_count == 1));
+    }
+
+    #[test]
+    fn fresh_database_needs_no_migration() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+        migrate_legacy_vocabs(&conn).expect("migration");
+
+        assert!(list_vocab_from_db(&conn).expect("read").is_empty());
+    }
+
+    fn sample_entries() -> Vec<VocabEntry> {
+        vec![
+            VocabEntry {
+                part_of_speech: "verb".into(),
+                pron_uk: "/run/".into(),
+                pron_us: "/run/".into(),
+                sense_groups: vec![
+                    VocabSenseGroup {
+                        guide_word: "MOVE QUICKLY".into(),
+                        definitions: vec![model::VocabDefinition {
+                            id: 0,
+                            definition: "to move using your legs".into(),
+                            examples: vec!["I run every morning.".into()],
+                        }],
+                    },
+                    VocabSenseGroup {
+                        guide_word: "MANAGE".into(),
+                        definitions: vec![model::VocabDefinition {
+                            id: 0,
+                            definition: "to organize or control".into(),
+                            examples: vec![],
+                        }],
+                    },
+                ],
+            },
+            VocabEntry {
+                part_of_speech: "noun".into(),
+                pron_uk: String::new(),
+                pron_us: "/run/".into(),
+                sense_groups: vec![VocabSenseGroup {
+                    guide_word: String::new(),
+                    definitions: vec![model::VocabDefinition {
+                        id: 0,
+                        definition: "an act of running".into(),
+                        examples: vec!["He went for a run.".into()],
+                    }],
+                }],
+            },
+        ]
+    }
+
+    /// The three-level shape has to survive a write and read unchanged: the
+    /// schema stores it flat and rebuilds it by grouping.
+    #[test]
+    fn tree_survives_a_save_and_load_round_trip() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+
+        let entries = sample_entries();
+        let id = save_word_tree(&conn, None, "run", WordSource::Cambridge, &entries).expect("save");
+
+        let saved = get_vocab_by_id(&conn, id).expect("read").expect("word");
+        assert_eq!(saved.source, WordSource::Cambridge);
+        assert_eq!(saved.definition_count, 3);
+        assert_eq!(saved.entries.len(), 2);
+
+        assert_eq!(saved.entries[0].part_of_speech, "verb");
+        assert_eq!(saved.entries[0].sense_groups.len(), 2);
+        assert_eq!(saved.entries[0].sense_groups[0].guide_word, "MOVE QUICKLY");
+        assert_eq!(saved.entries[0].sense_groups[1].guide_word, "MANAGE");
+
+        assert_eq!(saved.entries[1].part_of_speech, "noun");
+        assert_eq!(saved.entries[1].sense_groups[0].guide_word, "");
+        assert_eq!(
+            saved.entries[1].sense_groups[0].definitions[0].examples,
+            vec!["He went for a run."]
+        );
+    }
+
+    /// Two entries can share a guide word without being merged: grouping keys
+    /// off entry_index first.
+    #[test]
+    fn entries_with_matching_guide_words_stay_separate() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+
+        let entries = vec![
+            VocabEntry {
+                part_of_speech: "verb".into(),
+                pron_uk: String::new(),
+                pron_us: String::new(),
+                sense_groups: vec![VocabSenseGroup {
+                    guide_word: String::new(),
+                    definitions: vec![model::VocabDefinition {
+                        id: 0,
+                        definition: "first".into(),
+                        examples: vec![],
+                    }],
+                }],
+            },
+            VocabEntry {
+                part_of_speech: "noun".into(),
+                pron_uk: String::new(),
+                pron_us: String::new(),
+                sense_groups: vec![VocabSenseGroup {
+                    guide_word: String::new(),
+                    definitions: vec![model::VocabDefinition {
+                        id: 0,
+                        definition: "second".into(),
+                        examples: vec![],
+                    }],
+                }],
+            },
+        ];
+
+        let id = save_word_tree(&conn, None, "split", WordSource::Manual, &entries).expect("save");
+        let saved = get_vocab_by_id(&conn, id).expect("read").expect("word");
+
+        assert_eq!(saved.entries.len(), 2);
+        assert_eq!(saved.entries[0].part_of_speech, "verb");
+        assert_eq!(saved.entries[1].part_of_speech, "noun");
+    }
+
+    #[test]
+    fn saving_replaces_definitions_instead_of_appending() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+
+        let id = save_word_tree(&conn, None, "run", WordSource::Cambridge, &sample_entries())
+            .expect("save");
+
+        let trimmed = vec![VocabEntry {
+            part_of_speech: "noun".into(),
+            pron_uk: String::new(),
+            pron_us: String::new(),
+            sense_groups: vec![VocabSenseGroup {
+                guide_word: String::new(),
+                definitions: vec![model::VocabDefinition {
+                    id: 0,
+                    definition: "only one left".into(),
+                    examples: vec![],
+                }],
+            }],
+        }];
+        save_word_tree(&conn, Some(id), "run", WordSource::Manual, &trimmed).expect("resave");
+
+        let saved = get_vocab_by_id(&conn, id).expect("read").expect("word");
+        assert_eq!(saved.definition_count, 1);
+        assert_eq!(saved.source, WordSource::Manual);
+    }
+
+    /// Deleting a word must take its definitions with it, which only happens
+    /// when the foreign_keys pragma is on.
+    #[test]
+    fn deleting_a_word_cascades_to_its_definitions() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("pragma");
+        create_schema(&conn).expect("schema");
+
+        let id = save_word_tree(&conn, None, "run", WordSource::Cambridge, &sample_entries())
+            .expect("save");
+        conn.execute("DELETE FROM vocabs WHERE id = ?1", params![id])
+            .expect("delete");
+
+        let orphans: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vocab_definitions", [], |row| {
+                row.get(0)
+            })
+            .expect("count");
+        assert_eq!(orphans, 0);
+    }
+
+    /// Rotation walks every definition of a word before moving to the next.
+    #[test]
+    fn cards_flatten_every_definition_in_order() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+
+        save_word_tree(&conn, None, "run", WordSource::Cambridge, &sample_entries()).expect("save");
+        save_word_tree(
+            &conn,
+            None,
+            "apple",
+            WordSource::Manual,
+            &[VocabEntry {
+                part_of_speech: "noun".into(),
+                pron_uk: String::new(),
+                pron_us: String::new(),
+                sense_groups: vec![VocabSenseGroup {
+                    guide_word: String::new(),
+                    definitions: vec![model::VocabDefinition {
+                        id: 0,
+                        definition: "a round fruit".into(),
+                        examples: vec![],
+                    }],
+                }],
+            }],
+        )
+        .expect("save");
+
+        let words = list_vocab_from_db(&conn).expect("read");
+        let cards = build_cards(&words);
+
+        // Words are listed alphabetically, so "apple" comes first.
+        assert_eq!(cards.len(), 4);
+        assert_eq!(cards[0].word, "apple");
+        assert_eq!((cards[0].position, cards[0].total), (1, 1));
+
+        assert_eq!(cards[1].word, "run");
+        assert_eq!((cards[1].position, cards[1].total), (1, 3));
+        assert_eq!(cards[1].guide_word, "MOVE QUICKLY");
+        assert_eq!(cards[2].guide_word, "MANAGE");
+        assert_eq!(cards[3].part_of_speech, "noun");
+        assert_eq!((cards[3].position, cards[3].total), (3, 3));
+    }
+
+    #[test]
+    fn validation_rejects_empty_trees_and_keeps_partial_rows() {
+        let empty = VocabTreeInput {
+            word: "run".into(),
+            entries: vec![],
+        };
+        assert!(validate_tree_input(&empty).is_err());
+
+        let blank_definitions = VocabTreeInput {
+            word: "run".into(),
+            entries: vec![VocabEntry {
+                part_of_speech: "verb".into(),
+                pron_uk: String::new(),
+                pron_us: String::new(),
+                sense_groups: vec![VocabSenseGroup {
+                    guide_word: String::new(),
+                    definitions: vec![model::VocabDefinition {
+                        id: 0,
+                        definition: "   ".into(),
+                        examples: vec![],
+                    }],
+                }],
+            }],
+        };
+        assert!(validate_tree_input(&blank_definitions).is_err());
+
+        // A blank example line is dropped rather than treated as an error.
+        let with_blank_example = VocabTreeInput {
+            word: "  run  ".into(),
+            entries: vec![VocabEntry {
+                part_of_speech: "verb".into(),
+                pron_uk: String::new(),
+                pron_us: String::new(),
+                sense_groups: vec![VocabSenseGroup {
+                    guide_word: String::new(),
+                    definitions: vec![model::VocabDefinition {
+                        id: 0,
+                        definition: "to move quickly".into(),
+                        examples: vec!["".into(), "I run.".into()],
+                    }],
+                }],
+            }],
+        };
+        let (word, entries) = validate_tree_input(&with_blank_example).expect("valid");
+        assert_eq!(word, "run");
+        assert_eq!(
+            entries[0].sense_groups[0].definitions[0].examples,
+            vec!["I run."]
+        );
+    }
+
+    /// The manager title bar moves the window with `startDragging` and
+    /// `toggleMaximize`. Neither ships in `core:window:default`, and a denied
+    /// command rejects inside the webview without reaching Rust, so the only
+    /// symptom is a title bar that does nothing. Pin the grant here.
+    #[test]
+    fn capabilities_grant_the_window_commands_the_title_bar_uses() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capabilities")
+            .join("default.json");
+        let raw = std::fs::read_to_string(&path).expect("capability file");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+
+        let granted: Vec<&str> = parsed["permissions"]
+            .as_array()
+            .expect("permissions array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        for required in [
+            "core:window:allow-start-dragging",
+            "core:window:allow-toggle-maximize",
+        ] {
+            assert!(
+                granted.contains(&required),
+                "{required} is missing from capabilities/default.json, \
+                 so the manager title bar cannot move the window",
+            );
+        }
+
+        let windows: Vec<&str> = parsed["windows"]
+            .as_array()
+            .expect("windows array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect();
+        assert!(
+            windows.contains(&"manager"),
+            "the manager window must be covered by the capability",
+        );
+    }
 }
