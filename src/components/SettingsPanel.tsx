@@ -10,13 +10,36 @@ export const SettingsPanel: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [launchAtLogin, setLaunchAtLogin] = useState(false);
+  const [launchBusy, setLaunchBusy] = useState(false);
 
   useEffect(() => {
     invoke<AppSettings>('get_settings')
       .then(setSettings)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
+
+    invoke<boolean>('get_launch_at_login')
+      .then(setLaunchAtLogin)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
+
+  // Applies at once rather than on Save: the login item belongs to macOS, not
+  // to the settings table the Save button writes.
+  const toggleLaunchAtLogin = async (enabled: boolean) => {
+    setLaunchBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const actual = await invoke<boolean>('set_launch_at_login', { enabled });
+      setLaunchAtLogin(actual);
+      setMessage(actual ? 'Vocab will open when you log in.' : 'Vocab will no longer open at login.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLaunchBusy(false);
+    }
+  };
 
   const save = async () => {
     setBusy(true);
@@ -38,10 +61,23 @@ export const SettingsPanel: React.FC = () => {
       <section className="settings-panel">
         <div className="editor-header">
           <div>
-            <p className="eyebrow">Vocabulary backup</p>
+            <p className="eyebrow">Startup and backup</p>
             <h1>Settings</h1>
           </div>
         </div>
+
+        <label className="settings-toggle">
+          <input
+            type="checkbox"
+            checked={launchAtLogin}
+            onChange={(event) => toggleLaunchAtLogin(event.target.checked)}
+            disabled={launchBusy}
+          />
+          <span>
+            <strong>Open at login</strong>
+            <small>Start the menu bar app automatically when you log in to your Mac.</small>
+          </span>
+        </label>
 
         <div className="settings-field">
           <label htmlFor="backupPath">Backup file path</label>

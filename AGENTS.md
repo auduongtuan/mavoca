@@ -44,7 +44,8 @@ and `src-tauri/tauri.conf.json`.
   commands for list, add, refresh, create, update, and delete.
 - `src/components/VocabTreeEditor.tsx` edits the three-level tree: entries,
   guide-word sense groups, and definitions with their examples.
-- `src/components/SettingsPanel.tsx` renders the backup path settings UI.
+- `src/components/SettingsPanel.tsx` renders the open-at-login toggle and the
+  backup path settings UI.
 - `src/types.ts` defines frontend types shared across React components.
 - `src/App.css` contains popup, manager, settings, light mode, and dark mode
   styling. It intentionally uses `color-scheme` rather than custom scrollbar
@@ -118,6 +119,17 @@ example. The migration is transactional and idempotent.
 The frontend mirrors these shapes in `src/types.ts` using camelCase:
 `VocabWord` holds `entries`, `source`, and `definitionCount`; `VocabCardData` is
 one flattened definition with `position` and `total` for the popup.
+
+## Open At Login
+
+`tauri-plugin-autostart` registers a LaunchAgent for the running executable.
+macOS owns that state, so `get_launch_at_login` reads it back instead of
+storing a copy in `settings`, and the toggle applies immediately rather than on
+Save. Enabling it from `bun run tauri dev` registers the debug binary under
+`target/`; toggle it from the bundled app instead.
+
+The plugin is held at 2.5.x: 2.5.1 requires Tauri 2.10 and pulls the whole
+Tauri stack up with it. Upgrade the two together, deliberately.
 
 ## Backup Behavior
 

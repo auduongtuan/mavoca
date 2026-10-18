@@ -784,6 +784,33 @@ html, body {
   opacity: 0.4;
 }
 
+.settings-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.settings-toggle input {
+  margin-top: 2px;
+  accent-color: #37352f;
+}
+
+.settings-toggle span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-toggle strong {
+  font-size: 13px;
+}
+
+.settings-toggle small {
+  color: #787774;
+  font-size: 12px;
+}
+
 .settings-field {
   display: flex;
   flex-direction: column;
@@ -1068,6 +1095,10 @@ html, body {
     color: #a7a6a2;
   }
 
+  .settings-toggle input {
+    accent-color: #e3e2e0;
+  }
+
   .settings-shell {
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
@@ -1150,6 +1181,7 @@ html, body {
   .word-row small,
   .manager-empty,
   .eyebrow,
+  .settings-toggle small,
   .settings-field label,
   .settings-field p,
   .form-grid label {

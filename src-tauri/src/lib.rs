@@ -881,6 +881,34 @@ fn update_settings(
     load_settings_from_db(&conn)
 }
 
+/// The login item lives in a LaunchAgent the OS owns, so it is read back
+/// rather than mirrored in the settings table where it could drift.
+#[tauri::command]
+fn get_launch_at_login(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|err| format!("Failed to read the login item: {err}"))
+}
+
+#[tauri::command]
+fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let autolaunch = app.autolaunch();
+    if enabled {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    }
+    .map_err(|err| format!("Failed to update the login item: {err}"))?;
+
+    autolaunch
+        .is_enabled()
+        .map_err(|err| format!("Failed to read the login item: {err}"))
+}
+
 /// Writes a word row plus its whole tree in one transaction, so a word is never
 /// left with a half-written set of definitions.
 fn save_word_tree(
@@ -1220,6 +1248,10 @@ fn setup_system_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()>
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             show_main_window,
             hide_main_window,
@@ -1232,6 +1264,8 @@ pub fn run() {
             set_current_vocab_id,
             get_settings,
             update_settings,
+            get_launch_at_login,
+            set_launch_at_login,
             add_vocab_word,
             refresh_vocab_word,
             translate_texts,
