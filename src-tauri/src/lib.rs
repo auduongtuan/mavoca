@@ -1,5 +1,6 @@
 mod dictionary;
 mod model;
+mod translator;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -1050,6 +1051,16 @@ fn delete_vocab(
     Ok(())
 }
 
+/// Async so Tauri runs it off the main thread, and the blocking work moves to
+/// a worker: Translation.framework finishes on the main queue, so holding the
+/// main thread here would stall until the bridge times out.
+#[tauri::command]
+async fn translate_texts(texts: Vec<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || translator::translate_to_vietnamese(&texts))
+        .await
+        .map_err(|err| format!("Translation task failed: {err}"))?
+}
+
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
     *state.is_window_visible.lock().unwrap() = true;
@@ -1223,6 +1234,7 @@ pub fn run() {
             update_settings,
             add_vocab_word,
             refresh_vocab_word,
+            translate_texts,
             create_vocab,
             update_vocab,
             delete_vocab

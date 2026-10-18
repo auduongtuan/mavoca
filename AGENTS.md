@@ -172,6 +172,26 @@ parses:
 cd src-tauri && cargo test -- --ignored --nocapture
 ```
 
+## Translation
+
+The popup's Translate button turns the current word and its definition into
+Vietnamese with Apple's on-device Translation framework, through the
+`translation-rs` crate. Examples stay in English. It is free, offline, and private, but the English and
+Vietnamese packs must be downloaded in System Settings → General → Language &
+Region → Translation Languages; without them `translator.rs` returns a hint
+saying so. Manual sessions need macOS 26 or later.
+
+- `src-tauri/src/translator.rs` has no database or Tauri dependencies, like
+  `dictionary.rs`.
+- The framework finishes its work on the main queue. `translate_texts` is an
+  `async` command that moves the work to `spawn_blocking`; calling the
+  translator from the main thread, including from a synchronous command,
+  stalls until the bridge times out.
+- `build.rs` adds `-rpath /usr/lib/swift`. The crate sets it for itself but it
+  does not propagate, and without it the app aborts at launch with
+  `Library not loaded: @rpath/libswift_Concurrency.dylib`.
+- `App.tsx` keys `VocabCard` by card, so a new card starts untranslated.
+
 ## Tray And Window Behavior
 
 - The tray title is the current vocabulary word.

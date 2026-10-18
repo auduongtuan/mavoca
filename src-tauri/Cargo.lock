@@ -3956,6 +3956,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "translation-rs",
  "urlencoding",
  "window-vibrancy 0.5.3",
 ]
@@ -4495,6 +4496,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9d12581f227e93f094d3af2ae690a574abb8a2b9b7a96e7cfe9647b2b617678"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "translation-rs"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01f40061e9214ffd6db2cabcc2312ea38c014d4ffd6a902ad841f7cfc8965c4d"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

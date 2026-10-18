@@ -34,6 +34,7 @@ function LearningApp() {
   return (
     <main className="app">
       <VocabCard
+        key={`${card.vocabId}-${card.position}`}
         card={card}
         onNext={getNextWord}
         onPrevious={getPreviousWord}
