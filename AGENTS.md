@@ -186,6 +186,11 @@ cd src-tauri && cargo test -- --ignored --nocapture
   - `showMenuOnLeftClick`
 - `setup_system_tray` also calls `set_show_menu_on_left_click(false)` at
   runtime to make this explicit.
+- The menu is never attached to the tray item with `set_menu`. On macOS 27 an
+  attached `NSStatusItem` menu opens on left click and swallows the event, so
+  the popup never toggles, whatever the flags above say. `build_tray_menu`
+  builds it and the right-click branch of `on_tray_icon_event` shows it with
+  `popup_menu`. Do not reattach it.
 - The main popup is hidden on startup and hidden again when it loses focus.
 - Popup positioning is handled in Rust and uses the click position when opened
   from the tray.

@@ -1180,7 +1180,7 @@ fn start_auto_rotation(app: tauri::AppHandle, state: AppState) {
     });
 }
 
-fn setup_system_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
+fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let manager_item = MenuItem::with_id(
         app,
         TRAY_OPEN_MANAGER_ID,
@@ -1190,9 +1190,16 @@ fn setup_system_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()>
     )?;
     let settings_item =
         MenuItem::with_id(app, TRAY_OPEN_SETTINGS_ID, "Settings", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&manager_item, &settings_item])?;
+    Menu::with_items(app, &[&manager_item, &settings_item])
+}
+
+/// The menu is deliberately not attached to the tray item. On macOS 27 an
+/// attached `NSStatusItem` menu opens on left click and swallows the event,
+/// regardless of `set_show_menu_on_left_click(false)`, so the popup never
+/// toggles. Right click pops the menu up from `on_tray_icon_event` instead.
+fn setup_system_tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     let tray = app.tray_by_id("main").unwrap();
-    tray.set_menu(Some(menu))?;
+    tray.set_menu(None::<Menu<R>>)?;
     tray.set_icon(None)?;
     tray.set_show_menu_on_left_click(false)?;
     Ok(())
@@ -1314,16 +1321,24 @@ pub fn run() {
             _ => {}
         })
         .on_tray_icon_event(move |tray, event| {
-            if let tauri::tray::TrayIconEvent::Click {
-                button: tauri::tray::MouseButton::Left,
+            let tauri::tray::TrayIconEvent::Click {
+                button,
                 button_state: tauri::tray::MouseButtonState::Up,
                 position,
                 ..
             } = event
-            {
-                let app = tray.app_handle();
-                if let Some(state) = app.try_state::<AppState>() {
-                    if let Some(window) = app.get_webview_window("main") {
+            else {
+                return;
+            };
+
+            let app = tray.app_handle();
+            let Some(window) = app.get_webview_window("main") else {
+                return;
+            };
+
+            match button {
+                tauri::tray::MouseButton::Left => {
+                    if let Some(state) = app.try_state::<AppState>() {
                         let is_visible = window.is_visible().unwrap_or(false);
                         if is_visible {
                             *state.is_window_visible.lock().unwrap() = false;
@@ -1335,6 +1350,14 @@ pub fn run() {
                         }
                     }
                 }
+                tauri::tray::MouseButton::Right => {
+                    // With no position the menu opens at the cursor in screen
+                    // coordinates, so the hidden popup window is a valid host.
+                    if let Ok(menu) = build_tray_menu(app) {
+                        let _ = window.popup_menu(&menu);
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
