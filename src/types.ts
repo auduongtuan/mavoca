@@ -52,4 +52,6 @@ export interface VocabCardData {
 
 export interface AppSettings {
   backupPath: string;
+  /** Accelerator such as `Cmd+Ctrl+Shift+N`; empty when disabled. */
+  addWordShortcut: string;
 }

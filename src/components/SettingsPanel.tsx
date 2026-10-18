@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { AppSettings } from '../types';
+import { ShortcutRecorder } from './ShortcutRecorder';
 
 const defaultDropboxPath = '~/Dropbox/Vocab Learning/vocab.sqlite3';
+// Mirrors DEFAULT_ADD_WORD_SHORTCUT in lib.rs.
+const defaultAddWordShortcut = 'Cmd+Ctrl+Shift+N';
 
 export const SettingsPanel: React.FC = () => {
-  const [settings, setSettings] = useState<AppSettings>({ backupPath: '' });
+  const [settings, setSettings] = useState<AppSettings>({ backupPath: '', addWordShortcut: '' });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -48,7 +51,7 @@ export const SettingsPanel: React.FC = () => {
     try {
       const nextSettings = await invoke<AppSettings>('update_settings', { settings });
       setSettings(nextSettings);
-      setMessage(nextSettings.backupPath ? 'Backup location saved.' : 'Automatic backup disabled.');
+      setMessage('Settings saved.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -61,7 +64,7 @@ export const SettingsPanel: React.FC = () => {
       <section className="settings-panel">
         <div className="editor-header">
           <div>
-            <p className="eyebrow">Startup and backup</p>
+            <p className="eyebrow">Startup, shortcut and backup</p>
             <h1>Settings</h1>
           </div>
         </div>
@@ -80,11 +83,38 @@ export const SettingsPanel: React.FC = () => {
         </label>
 
         <div className="settings-field">
+          <label htmlFor="addWordShortcut">Add word shortcut</label>
+          <div className="shortcut-row">
+            <ShortcutRecorder
+              id="addWordShortcut"
+              value={settings.addWordShortcut}
+              onChange={(addWordShortcut) => setSettings({ ...settings, addWordShortcut })}
+              disabled={loading || busy}
+            />
+            <button
+              className="secondary-btn"
+              onClick={() => setSettings({ ...settings, addWordShortcut: defaultAddWordShortcut })}
+              disabled={loading || busy}
+            >
+              Reset
+            </button>
+            <button
+              className="secondary-btn"
+              onClick={() => setSettings({ ...settings, addWordShortcut: '' })}
+              disabled={loading || busy}
+            >
+              Turn off
+            </button>
+          </div>
+          <p>Works from any app. Click the box, then press the keys you want.</p>
+        </div>
+
+        <div className="settings-field">
           <label htmlFor="backupPath">Backup file path</label>
           <input
             id="backupPath"
             value={settings.backupPath}
-            onChange={(event) => setSettings({ backupPath: event.target.value })}
+            onChange={(event) => setSettings({ ...settings, backupPath: event.target.value })}
             placeholder={defaultDropboxPath}
             disabled={loading || busy}
           />
@@ -100,14 +130,14 @@ export const SettingsPanel: React.FC = () => {
         <div className="editor-actions">
           <button
             className="secondary-btn"
-            onClick={() => setSettings({ backupPath: '' })}
+            onClick={() => setSettings({ ...settings, backupPath: '' })}
             disabled={loading || busy}
           >
             Disable backup
           </button>
           <button
             className="secondary-btn"
-            onClick={() => setSettings({ backupPath: defaultDropboxPath })}
+            onClick={() => setSettings({ ...settings, backupPath: defaultDropboxPath })}
             disabled={loading || busy}
           >
             Use Dropbox

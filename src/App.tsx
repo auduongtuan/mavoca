@@ -6,6 +6,7 @@ import { LoadingState } from './components/LoadingState';
 import { ErrorState } from './components/ErrorState';
 import { VocabManager } from './components/VocabManager';
 import { SettingsPanel } from './components/SettingsPanel';
+import { QuickAdd } from './components/QuickAdd';
 import "./App.css";
 
 function LearningApp() {
@@ -56,6 +57,10 @@ function App() {
 
   if (getCurrentWindow().label === 'settings') {
     return <SettingsPanel />;
+  }
+
+  if (getCurrentWindow().label === 'quick-add') {
+    return <QuickAdd />;
   }
 
   return <LearningApp />;

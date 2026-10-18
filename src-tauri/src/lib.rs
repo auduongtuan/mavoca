@@ -20,6 +20,10 @@ use model::{
 };
 
 const BACKUP_PATH_SETTING: &str = "backup_path";
+const ADD_WORD_SHORTCUT_SETTING: &str = "add_word_shortcut";
+/// Global shortcut that opens the quick-add window. An empty setting disables it.
+const DEFAULT_ADD_WORD_SHORTCUT: &str = "Cmd+Ctrl+Shift+N";
+const QUICK_ADD_WINDOW_LABEL: &str = "quick-add";
 const TRAY_OPEN_MANAGER_ID: &str = "open-manager";
 const TRAY_OPEN_SETTINGS_ID: &str = "open-settings";
 const AUTO_ROTATION_INTERVAL_SECS: u64 = 10;
@@ -44,6 +48,7 @@ struct SeedVocabWord {
 #[serde(rename_all = "camelCase")]
 struct AppSettings {
     backup_path: String,
+    add_word_shortcut: String,
 }
 
 #[derive(Clone)]
@@ -449,12 +454,17 @@ fn ensure_default_settings(conn: &Connection) -> Result<(), String> {
         set_setting(conn, BACKUP_PATH_SETTING, &backup_path)?;
     }
 
+    if get_setting(conn, ADD_WORD_SHORTCUT_SETTING)?.is_none() {
+        set_setting(conn, ADD_WORD_SHORTCUT_SETTING, DEFAULT_ADD_WORD_SHORTCUT)?;
+    }
+
     Ok(())
 }
 
 fn load_settings_from_db(conn: &Connection) -> Result<AppSettings, String> {
     Ok(AppSettings {
         backup_path: get_setting(conn, BACKUP_PATH_SETTING)?.unwrap_or_default(),
+        add_word_shortcut: get_setting(conn, ADD_WORD_SHORTCUT_SETTING)?.unwrap_or_default(),
     })
 }
 
@@ -877,12 +887,49 @@ fn get_settings(state: tauri::State<AppState>) -> Result<AppSettings, String> {
     load_settings_from_db(&conn)
 }
 
+/// Replaces the registered add-word shortcut. An empty value leaves none
+/// registered. Fails without changing anything when the value does not parse.
+fn register_add_word_shortcut(app: &tauri::AppHandle, value: &str) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+
+    let value = value.trim();
+    let shortcut = if value.is_empty() {
+        None
+    } else {
+        Some(
+            value
+                .parse::<Shortcut>()
+                .map_err(|err| format!("'{value}' is not a valid shortcut: {err}"))?,
+        )
+    };
+
+    let manager = app.global_shortcut();
+    manager
+        .unregister_all()
+        .map_err(|err| format!("Failed to clear the shortcut: {err}"))?;
+    if let Some(shortcut) = shortcut {
+        manager.register(shortcut).map_err(|err| {
+            format!("Couldn't use {value}; another app may already own it. ({err})")
+        })?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn update_settings(
     state: tauri::State<AppState>,
+    app: tauri::AppHandle,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
     let conn = state.db.lock().unwrap();
+    let shortcut = settings.add_word_shortcut.trim();
+    if let Err(err) = register_add_word_shortcut(&app, shortcut) {
+        // Put the saved shortcut back so a rejected one never leaves it unset.
+        let saved = get_setting(&conn, ADD_WORD_SHORTCUT_SETTING)?.unwrap_or_default();
+        let _ = register_add_word_shortcut(&app, &saved);
+        return Err(err);
+    }
+    set_setting(&conn, ADD_WORD_SHORTCUT_SETTING, shortcut)?;
     set_setting(&conn, BACKUP_PATH_SETTING, settings.backup_path.trim())?;
     sync_database_backup(&conn)?;
     load_settings_from_db(&conn)
@@ -969,11 +1016,25 @@ fn save_word_tree(
 
 /// Adds a word by fetching it and importing every definition, no picker.
 /// Cambridge is tried first; the fetch layer falls back on its own.
+///
+/// Runs off the main thread: the fetch is a network call, and the quick-add
+/// window has to keep painting while it waits.
 #[tauri::command]
-fn add_vocab_word(
-    state: tauri::State<AppState>,
+async fn add_vocab_word(
+    state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
     word: String,
+) -> Result<VocabWord, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || add_vocab_word_blocking(&state, &app, &word))
+        .await
+        .map_err(|err| format!("Add task failed: {err}"))?
+}
+
+fn add_vocab_word_blocking(
+    state: &AppState,
+    app: &tauri::AppHandle,
+    word: &str,
 ) -> Result<VocabWord, String> {
     let clean_word = normalize_text(&word);
     if clean_word.is_empty() {
@@ -997,7 +1058,7 @@ fn add_vocab_word(
         get_vocab_by_id(&conn, id)?.ok_or_else(|| "Created word was not found".to_string())?
     };
 
-    sync_after_vocab_change(&app, &state)?;
+    sync_after_vocab_change(app, state)?;
     Ok(saved)
 }
 
@@ -1134,6 +1195,22 @@ fn show_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         .set_focus()
         .map_err(|err| format!("Failed to focus settings: {err}"))?;
     Ok(())
+}
+
+/// Opens the quick-add window; the add-word shortcut lands here.
+fn show_quick_add_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) {
+        let _ = window.center();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+#[tauri::command]
+fn hide_quick_add_window(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) {
+        let _ = window.hide();
+    }
 }
 
 #[tauri::command]
@@ -1285,8 +1362,19 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    // Only one shortcut is ever registered, so any press is it.
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        show_quick_add_window(app);
+                    }
+                })
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             show_main_window,
+            hide_quick_add_window,
             hide_main_window,
             resize_popup,
             show_manager_window,
@@ -1327,6 +1415,15 @@ pub fn run() {
 
             sync_backup_from_state(&app_state)?;
 
+            let saved_shortcut = {
+                let conn = app_state.db.lock().unwrap();
+                load_settings_from_db(&conn)?.add_word_shortcut
+            };
+            // A shortcut another app already owns must not stop the app launching.
+            if let Err(err) = register_add_word_shortcut(app.handle(), &saved_shortcut) {
+                eprintln!("{err}");
+            }
+
             app.manage(app_state.clone());
             start_auto_rotation(app.handle().clone(), app_state.clone());
 
@@ -1364,6 +1461,41 @@ pub fn run() {
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Focused(false) = event {
                         *state_clone.is_window_visible.lock().unwrap() = false;
+                        let _ = window_clone.hide();
+                    }
+                });
+            }
+
+            if let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) {
+                #[cfg(target_os = "macos")]
+                {
+                    use objc2_app_kit::NSWindow;
+                    use window_vibrancy::{
+                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                    };
+
+                    let _ = apply_vibrancy(
+                        &window,
+                        NSVisualEffectMaterial::Popover,
+                        Some(NSVisualEffectState::Active),
+                        None,
+                    );
+
+                    unsafe {
+                        let ns_window = &*(window.ns_window().unwrap() as *mut NSWindow);
+                        if let Some(content_view) = ns_window.contentView() {
+                            content_view.setWantsLayer(true);
+                            if let Some(layer) = content_view.layer() {
+                                layer.setCornerRadius(12.0);
+                                layer.setMasksToBounds(true);
+                            }
+                        }
+                    }
+                }
+
+                let window_clone = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Focused(false) = event {
                         let _ = window_clone.hide();
                     }
                 });
@@ -1475,6 +1607,18 @@ mod tests {
         )
         .expect("legacy schema");
         conn
+    }
+
+    #[test]
+    fn default_add_word_shortcut_parses() {
+        use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+
+        let shortcut: Shortcut = DEFAULT_ADD_WORD_SHORTCUT.parse().unwrap();
+        assert_eq!(shortcut.key, Code::KeyN);
+        assert_eq!(
+            shortcut.mods,
+            Modifiers::SUPER | Modifiers::CONTROL | Modifiers::SHIFT
+        );
     }
 
     #[test]

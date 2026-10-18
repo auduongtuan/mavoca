@@ -887,6 +887,70 @@ html, body {
   font-size: 11px;
 }
 
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shortcut-recorder {
+  min-width: 160px;
+  padding: 7px 12px;
+  border: 1px solid rgba(55, 53, 47, 0.18);
+  border-radius: 6px;
+  background: transparent;
+  color: #37352f;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shortcut-recorder.recording {
+  border-color: #2f6fb3;
+  color: #2f6fb3;
+  letter-spacing: normal;
+}
+
+/* Quick-add window, opened by the add-word shortcut */
+.quick-add {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  height: 100vh;
+  padding: 18px 20px;
+  background: transparent;
+}
+
+.quick-add-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #787774;
+}
+
+.quick-add-field input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #37352f;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.quick-add-status {
+  color: #787774;
+  font-size: 12px;
+}
+
+.quick-add-status.error {
+  color: #c0443a;
+}
+
 .editor-actions {
   display: flex;
   justify-content: flex-end;
@@ -1247,12 +1311,29 @@ html, body {
   .settings-toggle small,
   .settings-field label,
   .settings-field p,
-  .form-grid label {
+  .form-grid label,
+  .quick-add-field,
+  .quick-add-status {
     color: #9b9a97;
   }
 
-  .settings-field code {
+  .settings-field code,
+  .quick-add-field input {
     color: #e3e2e0;
+  }
+
+  .shortcut-recorder {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #e3e2e0;
+  }
+
+  .shortcut-recorder.recording {
+    border-color: #7fb2f0;
+    color: #7fb2f0;
+  }
+
+  .quick-add-status.error {
+    color: #f28b82;
   }
 
   .secondary-btn {

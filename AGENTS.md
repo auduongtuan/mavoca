@@ -5,9 +5,10 @@
 This is a macOS menu bar vocabulary app built with Tauri v2, React 19,
 TypeScript, Vite, Rust, SQLite, and Bun.
 
-The app has three Tauri windows:
+The app has four Tauri windows:
 
 - `main`: frameless transparent always-on-top meaning popup.
+- `quick-add`: frameless one-field window the add-word shortcut opens.
 - `manager`: full vocabulary manager for add/edit/delete/lookup.
 - `settings`: backup configuration UI.
 
@@ -35,6 +36,7 @@ and `src-tauri/tauri.conf.json`.
   - `main` renders the learning popup.
   - `manager` renders `VocabManager`.
   - `settings` renders `SettingsPanel`.
+  - `quick-add` renders `QuickAdd`.
 - `src/hooks/useVocab.ts` loads the current popup card through Tauri commands
   and listens for Rust events: `vocab-changed`, `vocab-list-changed`, and
   `vocab-empty`. Rotation is driven by commands, not by index math in React.
@@ -44,8 +46,12 @@ and `src-tauri/tauri.conf.json`.
   commands for list, add, refresh, create, update, and delete.
 - `src/components/VocabTreeEditor.tsx` edits the three-level tree: entries,
   guide-word sense groups, and definitions with their examples.
-- `src/components/SettingsPanel.tsx` renders the open-at-login toggle and the
-  backup path settings UI.
+- `src/components/SettingsPanel.tsx` renders the open-at-login toggle, the
+  add-word shortcut, and the backup path settings UI.
+- `src/components/ShortcutRecorder.tsx` records a key combination as an
+  accelerator string such as `Cmd+Ctrl+Shift+N` and displays it as `⌃⇧⌘N`.
+- `src/components/QuickAdd.tsx` takes a single word and calls `add_vocab_word`,
+  which fetches every meaning; on success the meaning popup shows the new word.
 - `src/types.ts` defines frontend types shared across React components.
 - `src/App.css` contains popup, manager, settings, light mode, and dark mode
   styling. It intentionally uses `color-scheme` rather than custom scrollbar
@@ -130,6 +136,25 @@ Save. Enabling it from `bun run tauri dev` registers the debug binary under
 
 The plugin is held at 2.5.x: 2.5.1 requires Tauri 2.10 and pulls the whole
 Tauri stack up with it. Upgrade the two together, deliberately.
+
+## Add Word Shortcut
+
+`tauri-plugin-global-shortcut` registers a system-wide shortcut that opens the
+`quick-add` window. The accelerator lives in the `add_word_shortcut` setting,
+seeded with `DEFAULT_ADD_WORD_SHORTCUT` (`Cmd+Ctrl+Shift+N`); an empty value
+turns it off. `SettingsPanel` repeats the default for its Reset button.
+
+- `register_add_word_shortcut` is the only place shortcuts are registered. It
+  clears every registration first, so the plugin handler can treat any press as
+  the add-word shortcut.
+- `update_settings` registers the new shortcut before saving it. If another app
+  owns the combination it re-registers the saved one and returns the error, so
+  a rejected shortcut never leaves the app with none.
+- A failure at launch is only logged; it must not stop the app starting.
+- The plugin is pinned at `=2.3.0`: 2.3.1 requires a newer Tauri, the same
+  trap as the autostart plugin.
+- `add_vocab_word` is `async` and does its work in `spawn_blocking`, so the
+  quick-add window keeps painting while the dictionary lookup runs.
 
 ## Backup Behavior
 
