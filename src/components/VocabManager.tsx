@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { VocabEntry, VocabTreeInput, VocabWord, WordSource } from '../types';
 import { VocabTreeEditor, createEmptyEntries } from './VocabTreeEditor';
+import { ConfirmDialog } from './ui/ConfirmDialog';
 
 const sourceLabels: Record<WordSource, string> = {
   cambridge: 'Cambridge',
@@ -28,10 +29,7 @@ export const VocabManager: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Delete asks twice in place: the webview has no window.confirm, it just
-  // returns false without showing anything. Holding the id rather than a flag
-  // means selecting another word drops the pending confirmation.
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const selectedWord = words.find((word) => word.id === selectedId) ?? null;
   const appWindow = getCurrentWindow();
@@ -150,12 +148,6 @@ export const VocabManager: React.FC = () => {
     if (!selectedId) {
       return;
     }
-
-    if (confirmDeleteId !== selectedId) {
-      setConfirmDeleteId(selectedId);
-      return;
-    }
-    setConfirmDeleteId(null);
 
     runAction(async () => {
       await invoke('delete_vocab', { id: selectedId });
@@ -278,10 +270,10 @@ export const VocabManager: React.FC = () => {
             <div className="editor-actions">
               <button
                 className="danger-btn"
-                onClick={remove}
+                onClick={() => setConfirmingDelete(true)}
                 disabled={busy || !selectedId}
               >
-                {confirmDeleteId === selectedId ? `Delete "${selectedWord?.word ?? 'word'}"?` : 'Delete'}
+                Delete
               </button>
               <button className="primary-btn" onClick={save} disabled={busy}>
                 {busy ? 'Saving...' : 'Save vocabulary'}
@@ -290,6 +282,16 @@ export const VocabManager: React.FC = () => {
           </section>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        onOpenChange={setConfirmingDelete}
+        title={`Delete "${selectedWord?.word ?? 'this word'}"?`}
+        description="Its meanings and examples are removed too. This can't be undone."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={remove}
+      />
     </main>
   );
 };

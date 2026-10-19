@@ -284,7 +284,8 @@ saying so. Manual sessions need macOS 26 or later.
 - Primary buttons should use a solid background.
 - Never use `window.confirm`, `alert`, or `prompt`. The macOS webview does
   not implement them: `confirm` returns false without showing anything, so the
-  action silently never happens. Confirm in the UI instead, as Delete does.
+  action silently never happens. Use `ConfirmDialog` in `src/components/ui/`,
+  built on Base UI's `AlertDialog`, as Delete does.
 - Icons come from `@phosphor-icons/react`, imported by name so only the used
   ones are bundled. Do not hand-draw SVGs or use text glyphs or emoji as icons.
 - Part-of-speech selection in the manager is a `<select>`, not freeform text.
