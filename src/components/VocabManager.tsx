@@ -28,6 +28,10 @@ export const VocabManager: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Delete asks twice in place: the webview has no window.confirm, it just
+  // returns false without showing anything. Holding the id rather than a flag
+  // means selecting another word drops the pending confirmation.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
   const selectedWord = words.find((word) => word.id === selectedId) ?? null;
   const appWindow = getCurrentWindow();
@@ -147,10 +151,11 @@ export const VocabManager: React.FC = () => {
       return;
     }
 
-    const word = selectedWord?.word ?? 'this word';
-    if (!window.confirm(`Delete "${word}"?`)) {
+    if (confirmDeleteId !== selectedId) {
+      setConfirmDeleteId(selectedId);
       return;
     }
+    setConfirmDeleteId(null);
 
     runAction(async () => {
       await invoke('delete_vocab', { id: selectedId });
@@ -271,8 +276,12 @@ export const VocabManager: React.FC = () => {
             {message && <p className="manager-alert success">{message}</p>}
 
             <div className="editor-actions">
-              <button className="danger-btn" onClick={remove} disabled={busy || !selectedId}>
-                Delete
+              <button
+                className="danger-btn"
+                onClick={remove}
+                disabled={busy || !selectedId}
+              >
+                {confirmDeleteId === selectedId ? `Delete "${selectedWord?.word ?? 'word'}"?` : 'Delete'}
               </button>
               <button className="primary-btn" onClick={save} disabled={busy}>
                 {busy ? 'Saving...' : 'Save vocabulary'}
