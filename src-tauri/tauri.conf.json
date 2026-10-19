@@ -45,8 +45,8 @@
       {
         "label": "manager",
         "title": "Vocabulary Manager",
-        "width": 760,
-        "height": 580,
+        "width": 1000,
+        "height": 720,
         "minWidth": 680,
         "minHeight": 500,
         "resizable": true,
@@ -55,8 +55,8 @@
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
         "trafficLightPosition": {
-          "x": 14,
-          "y": 13
+          "x": 18,
+          "y": 18
         },
         "alwaysOnTop": false,
         "skipTaskbar": false,
