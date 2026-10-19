@@ -3,10 +3,12 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   ArrowLeft,
   ArrowRight,
+  Books,
   CaretLeft,
   CaretRight,
   Shuffle,
   SpeakerHigh,
+  Translate,
 } from '@phosphor-icons/react';
 import { VocabCardData } from '../types';
 import { usePopupAutoResize } from '../hooks/usePopupAutoResize';
@@ -130,8 +132,6 @@ export const VocabCard: React.FC<VocabCardProps> = ({
           {pronunciation && (
             <p className="word-pronunciation">{pronunciation}</p>
           )}
-          {/* Always rendered so showing the translation never shifts the card. */}
-          <p className="translation word-translation">{visibleTranslations?.[0]}</p>
         </div>
         <span
           className="category"
@@ -143,8 +143,19 @@ export const VocabCard: React.FC<VocabCardProps> = ({
       </div>
 
       <div className="card-meta">
-        {card.guideWord && <span className="guide-word">{card.guideWord}</span>}
+        <button
+          onClick={toggleTranslation}
+          className={showTranslation ? 'translate-btn active' : 'translate-btn'}
+          disabled={translating}
+          title={showTranslation ? 'Hide Vietnamese' : 'Translate to Vietnamese on this Mac'}
+          aria-label={showTranslation ? 'Hide Vietnamese' : 'Translate to Vietnamese'}
+          aria-pressed={showTranslation}
+        >
+          <Translate size={12} weight="bold" aria-hidden />
+          VI
+        </button>
         <div className="card-meta-end">
+          {card.guideWord && <span className="guide-word">{card.guideWord}</span>}
           {card.total > 1 && (
             <div className="meaning-stepper">
               <button
@@ -168,19 +179,16 @@ export const VocabCard: React.FC<VocabCardProps> = ({
               </button>
             </div>
           )}
-          <button
-            onClick={toggleTranslation}
-            className="translate-btn"
-            disabled={translating}
-            title="Translate to Vietnamese on this Mac"
-          >
-            {showTranslation ? 'Hide VI' : 'Translate VI'}
-          </button>
         </div>
       </div>
 
       <div className="meaning">
         <p>{card.definition}</p>
+        {/* Under the definition rather than in the header, so the header and
+            its divider never move when the translation appears. */}
+        {visibleTranslations?.[0] && (
+          <p className="translation word-translation">{visibleTranslations[0]}</p>
+        )}
         {visibleTranslations?.[1] && (
           <p className="translation">{visibleTranslations[1]}</p>
         )}
@@ -202,23 +210,24 @@ export const VocabCard: React.FC<VocabCardProps> = ({
       )}
 
       <div className="controls">
-        <button onClick={onPrevious} className="control-btn">
-          <ArrowLeft size={13} weight="bold" aria-hidden />
-          Previous
+        <button onClick={onPrevious} className="control-btn" title="Previous" aria-label="Previous">
+          <ArrowLeft size={15} weight="bold" aria-hidden />
         </button>
-        <button onClick={onRandom} className="control-btn random-btn">
-          <Shuffle size={13} weight="bold" aria-hidden />
-          Random
+        <button onClick={onRandom} className="control-btn random-btn" title="Random" aria-label="Random">
+          <Shuffle size={15} weight="bold" aria-hidden />
         </button>
-        <button onClick={onNext} className="control-btn">
-          Next
-          <ArrowRight size={13} weight="bold" aria-hidden />
+        <button onClick={onNext} className="control-btn" title="Next" aria-label="Next">
+          <ArrowRight size={15} weight="bold" aria-hidden />
+        </button>
+        <button
+          onClick={onManage}
+          className="control-btn manage-btn"
+          title="Manage vocabulary"
+          aria-label="Manage vocabulary"
+        >
+          <Books size={15} weight="bold" aria-hidden />
         </button>
       </div>
-
-      <button onClick={onManage} className="manage-btn">
-        Manage vocabulary
-      </button>
     </div>
   );
 };

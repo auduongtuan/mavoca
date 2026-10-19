@@ -35,7 +35,7 @@ html, body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  padding: 10px;
+  padding: 6px;
   overflow-y: auto;
   background: transparent;
 }
@@ -51,8 +51,8 @@ html, body {
   flex-shrink: 0;
   background: transparent;
   border-radius: 12px;
-  padding: 20px 18px;
-  gap: 16px;
+  padding: 14px;
+  gap: 12px;
   border: none;
   box-shadow: none;
 }
@@ -147,6 +147,8 @@ html, body {
 }
 
 .card-meta {
+  /* Shared by the meaning stepper and the VI toggle so they line up. */
+  --meta-btn-size: 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -179,8 +181,8 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: var(--meta-btn-size);
+  height: var(--meta-btn-size);
   padding: 0;
   border: 1px solid rgba(55, 53, 47, 0.18);
   border-radius: 5px;
@@ -201,7 +203,11 @@ html, body {
 }
 
 .translate-btn {
-  padding: 3px 7px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: var(--meta-btn-size);
+  padding: 0 6px;
   border: 1px solid rgba(55, 53, 47, 0.18);
   border-radius: 5px;
   background: transparent;
@@ -213,6 +219,14 @@ html, body {
 
 .translate-btn:hover {
   background: rgba(55, 53, 47, 0.06);
+}
+
+/* Pressed while the Vietnamese is showing. */
+.translate-btn.active,
+.translate-btn.active:hover {
+  border-color: #37352f;
+  background: #37352f;
+  color: #ffffff;
 }
 
 .translate-btn:disabled {
@@ -228,13 +242,7 @@ html, body {
 }
 
 .vocab-card .word-translation {
-  min-height: 1.5em;
-  margin-top: 2px;
-  overflow: hidden;
-  font-size: 13px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .vocab-card .translation-status {
@@ -258,12 +266,8 @@ html, body {
 }
 
 .example {
-  background: rgba(255, 255, 255, 0.12);
-  padding: 12px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  padding-top: 12px;
 }
 
 .example h3 {
@@ -286,16 +290,17 @@ html, body {
   display: flex;
   gap: 6px;
   margin-top: auto;
-  padding-top: 4px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  padding-top: 12px;
 }
 
 .control-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  flex: 1;
-  padding: 7px 10px;
+  width: 32px;
+  height: 30px;
+  padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 6px;
   font-size: 12px;
@@ -330,24 +335,9 @@ html, body {
   border-color: rgba(255, 255, 255, 0.4);
 }
 
+/* Navigation sits on the left, the way out to the manager on the right. */
 .manage-btn {
-  width: 100%;
-  padding: 7px 10px;
-  border: 1px solid rgba(55, 53, 47, 0.12);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.18);
-  color: #37352f;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
-.manage-btn:hover {
-  background: rgba(255, 255, 255, 0.28);
-  border-color: rgba(55, 53, 47, 0.2);
+  margin-left: auto;
 }
 
 /* Vocabulary Manager */
@@ -1118,6 +1108,10 @@ html, body {
     border-bottom-color: rgba(255, 255, 255, 0.08);
   }
 
+  .controls {
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
   .category {
     background: rgba(255, 255, 255, 0.12);
     color: rgba(255, 255, 255, 0.85);
@@ -1142,8 +1136,7 @@ html, body {
   }
 
   .example {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-top-color: rgba(255, 255, 255, 0.08);
   }
 
   .example h3 {
@@ -1155,7 +1148,7 @@ html, body {
   }
 
   .example-text {
-    color: #e3e2e0;
+    color: #ffffff;
   }
 
   .control-btn {
@@ -1184,16 +1177,6 @@ html, body {
     border-color: rgba(255, 255, 255, 0.45);
   }
 
-  .manage-btn {
-    background: rgba(255, 255, 255, 0.1);
-    color: #e3e2e0;
-    border-color: rgba(255, 255, 255, 0.18);
-  }
-
-  .manage-btn:hover {
-    background: rgba(255, 255, 255, 0.16);
-    border-color: rgba(255, 255, 255, 0.28);
-  }
 
   .manager-shell {
     background: transparent;
@@ -1406,6 +1389,13 @@ html, body {
   .meaning-step-btn {
     border-color: rgba(255, 255, 255, 0.2);
     color: #e3e2e0;
+  }
+
+  .translate-btn.active,
+  .translate-btn.active:hover {
+    border-color: #e3e2e0;
+    background: #e3e2e0;
+    color: #191919;
   }
 
   .translate-btn:hover,
