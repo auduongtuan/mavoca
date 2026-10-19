@@ -1200,9 +1200,26 @@ fn show_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 /// Opens the quick-add window; the add-word shortcut lands here.
 fn show_quick_add_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) {
+        activate_app();
         let _ = window.center();
         let _ = window.show();
         let _ = window.set_focus();
+    }
+}
+
+/// Brings the app to the front before a window is shown from a global
+/// shortcut, while another app is still active. `set_focus` only asks with the
+/// deprecated `activateIgnoringOtherApps`, which macOS 14 and later may refuse:
+/// the window becomes key for a moment, loses it again, and its blur handler
+/// hides it.
+fn activate_app() {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            // Unsafe only because `activate` was added in macOS 14; the app
+            // already needs macOS 26 for translation.
+            unsafe { objc2_app_kit::NSApplication::sharedApplication(mtm).activate() };
+        }
     }
 }
 
