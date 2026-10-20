@@ -274,13 +274,24 @@ fn parse_macos_dictionary(records: &[String]) -> Result<Vec<VocabEntry>, String>
 
     for record in records {
         let document = Html::parse_document(record);
-        let pron_us = first_text_in(document.root_element(), ".hg .ph")?
-            .map(|value| format_pronunciation(&value))
-            .unwrap_or_default();
+        // The transcription the dictionary gives the headword itself, used by a
+        // part of speech that carries none: `run` keeps one for the whole
+        // entry, while `record` repeats one per part of speech.
+        let entry_pron = headword_pronunciation_in(document.root_element())?.unwrap_or_default();
 
         for part_of_speech_node in document.select(&part_of_speech_selector) {
             let part_of_speech = first_text_in(part_of_speech_node, ".posg .pos")?
                 .unwrap_or_else(|| "unknown".into());
+
+            // A part of speech keeps its own transcription when it has one:
+            // `record` is /ˈrɛkərd/ as a noun and /rəˈkɔrd/ as a verb, and
+            // `lead` is /liːd/ or /lɛd/ depending on which entry it is. The
+            // popup shows the pronunciation of the card's own entry, so it
+            // follows the definition on screen instead of the first one.
+            let pron_us = match headword_pronunciation_in(part_of_speech_node)? {
+                Some(pronunciation) => pronunciation,
+                None => entry_pron.clone(),
+            };
 
             let numbered_senses: Vec<_> = part_of_speech_node
                 .select(&numbered_sense_selector)
@@ -341,6 +352,40 @@ fn parse_macos_dictionary(records: &[String]) -> Result<Vec<VocabEntry>, String>
 
 fn has_text_in(element: ElementRef<'_>, query: &str) -> bool {
     matches!(first_text_in(element, query), Ok(Some(_)))
+}
+
+/// True when an ancestor of `element` has `class_name`. Used to tell the
+/// headword's own markup from the blocks nested around it.
+fn is_inside(element: ElementRef<'_>, class_name: &str) -> bool {
+    element
+        .ancestors()
+        .filter_map(ElementRef::wrap)
+        .any(|ancestor| ancestor.value().classes().any(|class| class == class_name))
+}
+
+/// Reads the first transcription in `scope` that belongs to the headword.
+///
+/// Oxford writes a word's inflections ahead of the rest of the entry, and each
+/// one carries its own transcription — `run` opens with `running` (/ˈrənɪŋ/)
+/// and `ran` (/ræn/) before reaching any definition — inside `.infg`. Phrases
+/// and derivatives sit in `.subEntryBlock`. Neither is the word's own
+/// pronunciation, so both are skipped; on a bare `.se1` that leaves nothing and
+/// the entry-level transcription is used instead.
+fn headword_pronunciation_in(scope: ElementRef<'_>) -> Result<Option<String>, String> {
+    let ph_selector = selector(".ph")?;
+
+    for node in scope.select(&ph_selector) {
+        if is_inside(node, "infg") || is_inside(node, "subEntryBlock") {
+            continue;
+        }
+
+        let pronunciation = format_pronunciation(&text_of(node));
+        if !pronunciation.is_empty() {
+            return Ok(Some(pronunciation));
+        }
+    }
+
+    Ok(None)
 }
 
 fn fetch_from_cambridge(word: &str) -> Result<Vec<VocabEntry>, String> {
@@ -600,7 +645,7 @@ mod tests {
     const MACOS_MULTI_SENSE: &str = r#"<html><body><d:entry d:title="zorp" class="entry">
 <span class="hg x_xh0"><span class="hw">zorp </span><span class="prx"> | <span d:prn="US" class="ph t_respell">zôrp</span> | </span></span>
 <span class="sg">
-<span class="se1 x_xd0"><span class="posg x_xdh"><span d:pos="1" class="pos"><span class="gp tg_pos">verb </span></span><span class="infg">(<span class="inf">zorps</span>)</span></span>
+<span class="se1 x_xd0"><span class="posg x_xdh"><span d:pos="1" class="pos"><span class="gp tg_pos">verb </span></span><span class="infg">(<span class="inf">zorps </span><span class="prx"> | <span class="ph t_IPA">zorpz</span> | </span>)</span></span>
 <span class="se2 x_xd1 hasSn"><span class="gp sn">1 </span>
 <span class="msDict x_xd1sub t_first"><span class="gg">[no object] </span><span class="df">move in a wobbly way</span><span class="gp tg_df">: </span><span class="eg"><span class="ex"> the jelly zorped</span><span class="gp tg_eg"> | </span></span><span class="eg"><span class="gg">[with object]</span><span class="ex"><span class="lbl">:  </span>she zorped the tray</span><span class="gp tg_eg">. </span></span></span>
 <span class="msDict x_xd1sub hasSn t_subsense"><span class="gp sn">• </span><span class="df">wobble for fun</span>: <span class="eg"><span class="ex"> kids zorp</span></span></span>
@@ -609,7 +654,7 @@ mod tests {
 <span class="msDict x_xd1sub t_first"><span class="lg"><span class="sj">Sport </span></span><span class="df">score by wobbling<span class="gp tg_df">. </span></span></span>
 </span>
 </span>
-<span class="se1 x_xd0"><span class="posg x_xdh"><span class="pos"><span class="gp tg_pos">noun </span></span></span>
+<span class="se1 x_xd0"><span class="posg x_xdh"><span class="pos"><span class="gp tg_pos">noun </span></span></span><span class="prx"> | <span d:prn="US" class="ph t_IPA">zawrp</span> | </span>
 <span class="msDict x_xd1 t_core"><span class="df">a wobbly movement</span>: <span class="eg"><span class="ex"> a sudden zorp</span></span></span>
 </span>
 </span>
@@ -623,6 +668,8 @@ mod tests {
         assert_eq!(entries.len(), 2);
         let verb = &entries[0];
         assert_eq!(verb.part_of_speech, "verb");
+        // The inflection inside `.infg` has its own transcription; the entry
+        // falls back to the headword's, the first one on the page.
         assert_eq!(verb.pron_us, "/zôrp/");
         assert_eq!(verb.pron_uk, "");
         assert_eq!(verb.sense_groups.len(), 1);
@@ -644,10 +691,33 @@ mod tests {
         // block outside `.se1` is skipped.
         let noun = &entries[1];
         assert_eq!(noun.part_of_speech, "noun");
+        // Its own transcription wins over the headword's, so a word whose
+        // parts of speech are pronounced differently ("record") keeps both.
+        assert_eq!(noun.pron_us, "/zawrp/");
         let noun_definitions = &noun.sense_groups[0].definitions;
         assert_eq!(noun_definitions.len(), 1);
         assert_eq!(noun_definitions[0].definition, "a wobbly movement");
         assert_eq!(noun_definitions[0].examples, vec!["a sudden zorp"]);
+    }
+
+    #[test]
+    fn macos_dictionary_pronunciation_follows_the_part_of_speech() {
+        // Oxford's shape for "record": one headword, one part of speech per
+        // pronunciation, the transcription inside each `.se1`.
+        let record = r#"<html><body><d:entry d:title="zorp" class="entry">
+<span class="hg x_xh0"><span class="hw">zorp</span>
+<span class="se1 x_xd0"><span class="posg"><span class="pos"><span class="gp tg_pos">noun </span></span></span><span class="prx"> | <span class="ph t_IPA">zawrp</span> | </span><span class="msDict"><span class="df">a wobbly movement</span></span></span>
+<span class="se1 x_xd0"><span class="posg"><span class="pos"><span class="gp tg_pos">verb </span></span></span><span class="prx"> | <span class="ph t_IPA">zorp</span> | </span><span class="msDict"><span class="df">move in a wobbly way</span></span></span>
+</span>
+</d:entry></body></html>"#;
+
+        let entries = parse_macos_dictionary(&[record.to_string()]).expect("parse");
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].part_of_speech, "noun");
+        assert_eq!(entries[0].pron_us, "/zawrp/");
+        assert_eq!(entries[1].part_of_speech, "verb");
+        assert_eq!(entries[1].pron_us, "/zorp/");
     }
 
     #[test]
@@ -895,12 +965,29 @@ mod live_tests {
     #[test]
     #[ignore = "reads the dictionaries installed on this Mac"]
     fn macos_dictionary_is_readable_and_still_parses() {
-        for word in ["serendipity", "run", "bank"] {
+        // `record` and `lead` are the cases a single entry-level transcription
+        // got wrong: each part of speech, and each homograph, is pronounced
+        // differently, and the popup shows the one belonging to the definition
+        // on screen.
+        for word in ["serendipity", "run", "bank", "record", "lead"] {
             let entries = fetch_from_macos_dictionary(word)
                 .expect("the private functions changed or the dictionary is missing");
             println!("== {word}");
             print_entries(&truncate_entries(entries.clone()));
             assert!(!entries.is_empty(), "no entries for {word}");
+        }
+
+        for word in ["record", "lead"] {
+            let entries = fetch_from_macos_dictionary(word).expect("entry");
+            let pronunciations: Vec<&str> = entries
+                .iter()
+                .map(|entry| entry.pron_us.as_str())
+                .filter(|pron| !pron.is_empty())
+                .collect();
+            assert!(
+                pronunciations.windows(2).any(|pair| pair[0] != pair[1]),
+                "every entry of {word} shares one transcription: {pronunciations:?}"
+            );
         }
     }
 }

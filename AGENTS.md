@@ -201,6 +201,15 @@ dictionary by name and get each entry as HTML.
 - `parse_macos_dictionary` takes the first definition of each numbered sense
   (`.se2`) and drops the "•" subsenses, phrases, and derivatives. Oxford has
   no guide words and no UK pronunciation.
+- The transcription belongs to the part of speech, not the word: `record` is
+  `/ˈrɛkərd/` as a noun and `/rəˈkɔrd/` as a verb, and each homograph carries
+  its own. So it is read from the first `.ph` inside each `.se1`, falling back
+  to the entry's own transcription when that part of speech has none (`run`
+  keeps one for the whole entry). The first `.ph` on the page is *not* it: the
+  inflections in `.infg` come first and each is transcribed (`running`
+  `/ˈrənɪŋ/`, `ran` `/ræn/`), as do the phrases and derivatives in
+  `.subEntryBlock`, so both are skipped. The popup shows a card's own
+  transcription, so it follows the definition and part of speech on screen.
 - Which US pronunciation an entry's HTML holds depends on Oxford's setting in
   Dictionary.app: the default is Oxford's own respelling (`/baNGk/`), and "US
   English (IPA)" gives IPA. The setting lives in the `DCSDictionaryPrefs` key of
