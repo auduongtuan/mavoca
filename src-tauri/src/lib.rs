@@ -3,6 +3,7 @@ mod dictionary;
 mod macos_dictionary;
 mod model;
 mod translator;
+mod vietnamese;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -1153,10 +1154,16 @@ fn delete_vocab(
 /// a worker: Translation.framework finishes on the main queue, so holding the
 /// main thread here would stall until the bridge times out.
 #[tauri::command]
-async fn translate_texts(texts: Vec<String>) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || translator::translate_to_vietnamese(&texts))
-        .await
-        .map_err(|err| format!("Translation task failed: {err}"))?
+async fn translate_card(
+    word: String,
+    part_of_speech: String,
+    definition: String,
+) -> Result<vietnamese::CardTranslation, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        vietnamese::translate_card(&word, &part_of_speech, &definition)
+    })
+    .await
+    .map_err(|err| format!("Translation task failed: {err}"))?
 }
 
 #[tauri::command]
@@ -1409,7 +1416,7 @@ pub fn run() {
             set_launch_at_login,
             add_vocab_word,
             refresh_vocab_word,
-            translate_texts,
+            translate_card,
             create_vocab,
             update_vocab,
             delete_vocab

@@ -56,3 +56,12 @@ export interface AppSettings {
   /** Accelerator such as `Cmd+Ctrl+Shift+N`; empty when disabled. */
   addWordShortcut: string;
 }
+
+/** The popup's Vietnamese, from the `translate_card` command. */
+export interface CardTranslation {
+  /** The word's meaning: from Lạc Việt when it has the word, else translated. */
+  word: string;
+  /** The definition, translated; empty when the translator is unavailable. */
+  definition: string;
+  fromDictionary: boolean;
+}

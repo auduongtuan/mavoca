@@ -1,5 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   ArrowLeft,
   ArrowRight,
@@ -10,7 +11,7 @@ import {
   SpeakerHigh,
   Translate,
 } from '@phosphor-icons/react';
-import { VocabCardData } from '../types';
+import { CardTranslation, VocabCardData } from '../types';
 import { usePopupAutoResize } from '../hooks/usePopupAutoResize';
 
 const UK_VOICE_LANG = 'en-GB';
@@ -79,12 +80,37 @@ export const VocabCard: React.FC<VocabCardProps> = ({
   const pronunciation = card.pronUk || card.pronUs;
   const cardRef = useRef<HTMLDivElement>(null);
   usePopupAutoResize(cardRef);
-  // Index 0 is the word, index 1 the definition. The parent keys this
-  // component by card, so a new card starts untranslated.
-  const [translations, setTranslations] = useState<string[] | null>(null);
+  // The parent keys this component by card, so a new card starts untranslated.
+  const [translation, setTranslation] = useState<CardTranslation | null>(null);
   const [showTranslation, setShowTranslation] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [translateError, setTranslateError] = useState<string | null>(null);
+
+  // Translate in the background while the popup is open, so VI is usually
+  // instant: the translator takes about a second per sentence, and several
+  // seconds after its model was unloaded. Rust caches the result, and a VI
+  // press during the prefetch waits for it rather than starting again. Hidden
+  // rotations every few seconds are skipped. Failures surface on VI instead.
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    const prefetch = () => {
+      invoke('translate_card', {
+        word: card.word,
+        partOfSpeech: card.partOfSpeech,
+        definition: card.definition,
+      }).catch(() => {});
+    };
+
+    appWindow.isVisible().then((visible) => visible && prefetch()).catch(() => {});
+    const unlisten = appWindow.onFocusChanged(({ payload: focused }) => {
+      if (focused) {
+        prefetch();
+      }
+    });
+    return () => {
+      unlisten.then((stop) => stop());
+    };
+  }, [card.word, card.partOfSpeech, card.definition]);
 
   const toggleTranslation = async () => {
     if (showTranslation) {
@@ -92,17 +118,19 @@ export const VocabCard: React.FC<VocabCardProps> = ({
       return;
     }
     setShowTranslation(true);
-    if (translations) {
+    if (translation) {
       return;
     }
 
     setTranslating(true);
     setTranslateError(null);
     try {
-      const result = await invoke<string[]>('translate_texts', {
-        texts: [card.word, card.definition],
+      const result = await invoke<CardTranslation>('translate_card', {
+        word: card.word,
+        partOfSpeech: card.partOfSpeech,
+        definition: card.definition,
       });
-      setTranslations(result);
+      setTranslation(result);
     } catch (err) {
       setTranslateError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -110,7 +138,7 @@ export const VocabCard: React.FC<VocabCardProps> = ({
     }
   };
 
-  const visibleTranslations = showTranslation ? translations : null;
+  const visibleTranslation = showTranslation ? translation : null;
 
   return (
     <div className="vocab-card" ref={cardRef}>
@@ -186,11 +214,16 @@ export const VocabCard: React.FC<VocabCardProps> = ({
         <p>{card.definition}</p>
         {/* Under the definition rather than in the header, so the header and
             its divider never move when the translation appears. */}
-        {visibleTranslations?.[0] && (
-          <p className="translation word-translation">{visibleTranslations[0]}</p>
+        {visibleTranslation?.word && (
+          <p
+            className="translation word-translation"
+            title={visibleTranslation.fromDictionary ? 'From Lạc Việt dictionary' : 'Machine translation'}
+          >
+            {visibleTranslation.word}
+          </p>
         )}
-        {visibleTranslations?.[1] && (
-          <p className="translation">{visibleTranslations[1]}</p>
+        {visibleTranslation?.definition && (
+          <p className="translation">{visibleTranslation.definition}</p>
         )}
         {showTranslation && translating && (
           <p className="translation-status">Translating…</p>

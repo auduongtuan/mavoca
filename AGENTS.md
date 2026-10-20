@@ -245,19 +245,41 @@ cd src-tauri && cargo test -- --ignored --nocapture
 
 ## Translation
 
-The popup's Translate button turns the current word and its definition into
-Vietnamese with Apple's on-device Translation framework, through the
-`translation-rs` crate. Examples stay in English. It is free, offline, and private, but the English and
-Vietnamese packs must be downloaded in System Settings → General → Language &
-Region → Translation Languages; without them `translator.rs` returns a hint
-saying so. Manual sessions need macOS 26 or later.
+The popup's VI button shows the word and its definition in Vietnamese through
+the `translate_card` command, which `src-tauri/src/vietnamese.rs` implements.
+Examples stay in English. Nothing is stored; it is looked up on each press.
 
-- `src-tauri/src/translator.rs` has no database or Tauri dependencies, like
-  `dictionary.rs`.
-- The framework finishes its work on the main queue. `translate_texts` is an
+- The definition goes through Apple's on-device Translation framework, via the
+  `translation-rs` crate. It is free, offline, and private, but the English and
+  Vietnamese packs must be downloaded in System Settings → General → Language &
+  Region → Translation Languages; without them `translator.rs` returns a hint
+  saying so. Manual sessions need macOS 26 or later.
+- The word comes from Từ điển Lạc Việt, the English–Vietnamese dictionary
+  installed with macOS, read through the same bridge as the Oxford lookup. Its
+  senses are filtered by part of speech (`PART_OF_SPEECH_LABELS`), and
+  `pick_sense` chooses the one sharing the most syllables with the translated
+  definition, because Lạc Việt numbers senses differently from Oxford or
+  Cambridge. Fewer than `MIN_SENSE_OVERLAP` shared syllables keeps the first,
+  most common sense. When Lạc Việt has no entry, the word is machine
+  translated; when the translator fails but Lạc Việt has the word, the card
+  shows the word without a translated definition.
+- The translator takes about a second per sentence and five or more after its
+  model has been unloaded. So `VocabCard` calls `translate_card` in the
+  background whenever the popup is open on a card, results are cached in
+  `vietnamese.rs`, and the cache lock is held for a whole translation, so a VI
+  press during that prefetch waits for it instead of translating twice. The
+  word is only machine translated when Lạc Việt lacks it.
+- Lạc Việt is not saved with the word: the lookup is local and instant, its
+  senses do not line up with the stored ones, and saving would copy licensed
+  dictionary text into the backup.
+- `translator.rs` and `vietnamese.rs` have no database or Tauri dependencies,
+  like `dictionary.rs`.
+- The framework finishes its work on the main queue. `translate_card` is an
   `async` command that moves the work to `spawn_blocking`; calling the
   translator from the main thread, including from a synchronous command,
-  stalls until the bridge times out.
+  stalls until the bridge times out. For the same reason the translator cannot
+  run in `cargo test`; the `#[ignore]`d `lac_viet_is_readable_and_still_parses`
+  test feeds hand-written Vietnamese to the sense picker instead.
 - `build.rs` adds `-rpath /usr/lib/swift`. The crate sets it for itself but it
   does not propagate, and without it the app aborts at launch with
   `Library not loaded: @rpath/libswift_Concurrency.dylib`.
