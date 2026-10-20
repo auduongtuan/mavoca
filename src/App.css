@@ -288,10 +288,17 @@ html, body {
 
 .controls {
   display: flex;
-  gap: 6px;
+  /* Wider than inside .control-group, so Random reads as its own action. */
+  gap: 14px;
   margin-top: auto;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   padding-top: 12px;
+}
+
+/* Previous and Next, kept side by side. */
+.control-group {
+  display: flex;
+  gap: 4px;
 }
 
 .control-btn {

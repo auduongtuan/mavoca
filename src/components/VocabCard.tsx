@@ -243,14 +243,16 @@ export const VocabCard: React.FC<VocabCardProps> = ({
       )}
 
       <div className="controls">
-        <button onClick={onPrevious} className="control-btn" title="Previous" aria-label="Previous">
-          <ArrowLeft size={15} weight="bold" aria-hidden />
-        </button>
+        <div className="control-group">
+          <button onClick={onPrevious} className="control-btn" title="Previous" aria-label="Previous">
+            <ArrowLeft size={15} weight="bold" aria-hidden />
+          </button>
+          <button onClick={onNext} className="control-btn" title="Next" aria-label="Next">
+            <ArrowRight size={15} weight="bold" aria-hidden />
+          </button>
+        </div>
         <button onClick={onRandom} className="control-btn random-btn" title="Random" aria-label="Random">
           <Shuffle size={15} weight="bold" aria-hidden />
-        </button>
-        <button onClick={onNext} className="control-btn" title="Next" aria-label="Next">
-          <ArrowRight size={15} weight="bold" aria-hidden />
         </button>
         <button
           onClick={onManage}
