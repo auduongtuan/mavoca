@@ -698,6 +698,11 @@ html, body {
   white-space: nowrap;
 }
 
+.source-badge.source-macos {
+  background: rgba(46, 138, 87, 0.13);
+  color: #23704a;
+}
+
 .source-badge.source-cambridge {
   background: rgba(41, 98, 255, 0.12);
   color: #1f4bd8;
@@ -1431,6 +1436,11 @@ html, body {
 
   .source-badge {
     background: rgba(255, 255, 255, 0.09);
+  }
+
+  .source-badge.source-macos {
+    background: rgba(116, 211, 156, 0.16);
+    color: #a6e3bf;
   }
 
   .source-badge.source-cambridge {

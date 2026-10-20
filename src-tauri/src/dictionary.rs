@@ -16,6 +16,11 @@ const USER_AGENT: &str =
 /// ones worth learning.
 const MAX_DEFINITIONS_PER_WORD: usize = 12;
 
+/// The dictionary installed with macOS that lookups try first. It ships with
+/// every Mac, so nothing needs downloading; the British Oxford Dictionary of
+/// English is optional in Dictionary.app and often missing.
+const MACOS_DICTIONARY_NAME: &str = "New Oxford American Dictionary";
+
 const CAMBRIDGE_URL: &str = "https://dictionary.cambridge.org/us/dictionary/english";
 const DICTIONARY_API_URL: &str = "https://api.dictionaryapi.dev/api/v2/entries/en";
 
@@ -164,7 +169,12 @@ fn all_text_in(element: ElementRef<'_>, query: &str) -> Result<Vec<String>, Stri
     Ok(values)
 }
 
-/// Fetches a word, preferring Cambridge and falling back to dictionaryapi.dev.
+/// Fetches a word from the Oxford dictionary installed with macOS, then
+/// Cambridge, then dictionaryapi.dev.
+///
+/// The macOS dictionary is offline and complete, but read through private
+/// functions that a macOS release could change; any failure there moves on to
+/// the online sources.
 ///
 /// Cambridge sits behind a Cloudflare challenge that rejects unusual clients —
 /// the app's previous `VocabLearning/0.1` user-agent got a blanket HTTP 403.
@@ -175,6 +185,17 @@ pub fn fetch_word(word: &str) -> Result<FetchedWord, String> {
     if clean_word.is_empty() {
         return Err("Enter a word to look up".into());
     }
+
+    let macos_error = match fetch_from_macos_dictionary(&clean_word) {
+        Ok(entries) if !entries.is_empty() => {
+            return Ok(FetchedWord {
+                entries: truncate_entries(entries),
+                source: WordSource::MacosDictionary,
+            })
+        }
+        Ok(_) => format!("no {MACOS_DICTIONARY_NAME} entry for '{clean_word}'"),
+        Err(err) => err,
+    };
 
     let cambridge_error = match fetch_from_cambridge(&clean_word) {
         Ok(entries) if !entries.is_empty() => {
@@ -193,12 +214,111 @@ pub fn fetch_word(word: &str) -> Result<FetchedWord, String> {
             source: WordSource::Dictionaryapi,
         }),
         Ok(_) => Err(format!(
-            "No definitions found for '{clean_word}' (Cambridge: {cambridge_error})"
+            "No definitions found for '{clean_word}' (macOS: {macos_error}; Cambridge: {cambridge_error})"
         )),
         Err(fallback_error) => Err(format!(
-            "Could not look up '{clean_word}'. Cambridge: {cambridge_error}. Fallback: {fallback_error}"
+            "Could not look up '{clean_word}'. macOS: {macos_error}. Cambridge: {cambridge_error}. Fallback: {fallback_error}"
         )),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn fetch_from_macos_dictionary(word: &str) -> Result<Vec<VocabEntry>, String> {
+    let records = crate::macos_dictionary::lookup_html(MACOS_DICTIONARY_NAME, word)
+        .map_err(|err| err.to_string())?;
+    parse_macos_dictionary(&records)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn fetch_from_macos_dictionary(_word: &str) -> Result<Vec<VocabEntry>, String> {
+    Err("the macOS dictionary is only available on macOS".into())
+}
+
+/// Parses Oxford entries as Dictionary.app renders them, one HTML document per
+/// homograph ("bank" the river side and "bank" the business are two).
+///
+/// `.se1` is a part of speech, `.se2` a numbered sense, and `.msDict` a single
+/// definition; each numbered sense keeps only its first `.msDict`, because the
+/// "•" subsenses after it are too fine-grained for a card. A part of speech
+/// with a single sense has no `.se2` and holds its `.msDict` directly. Phrases,
+/// phrasal verbs, and derivatives sit in `.subEntryBlock`s outside `.se1` and
+/// are left out. Oxford has no guide words, so each entry gets one unlabelled
+/// group.
+fn parse_macos_dictionary(records: &[String]) -> Result<Vec<VocabEntry>, String> {
+    let part_of_speech_selector = selector(".se1")?;
+    let numbered_sense_selector = selector(".se2")?;
+    let definition_block_selector = selector(".msDict")?;
+    let mut entries = Vec::new();
+
+    for record in records {
+        let document = Html::parse_document(record);
+        let pron_us = first_text_in(document.root_element(), ".hg .ph")?
+            .map(|value| format_pronunciation(&value))
+            .unwrap_or_default();
+
+        for part_of_speech_node in document.select(&part_of_speech_selector) {
+            let part_of_speech = first_text_in(part_of_speech_node, ".posg .pos")?
+                .unwrap_or_else(|| "unknown".into());
+
+            let numbered_senses: Vec<_> = part_of_speech_node
+                .select(&numbered_sense_selector)
+                .collect();
+            let blocks: Vec<_> = if numbered_senses.is_empty() {
+                part_of_speech_node
+                    .select(&definition_block_selector)
+                    .filter(|block| !block.value().classes().any(|class| class == "t_subsense"))
+                    .collect()
+            } else {
+                numbered_senses
+                    .iter()
+                    .filter_map(|sense| {
+                        sense
+                            .select(&definition_block_selector)
+                            .find(|block| has_text_in(*block, ".df"))
+                    })
+                    .collect()
+            };
+
+            let mut definitions = Vec::new();
+            for block in blocks {
+                let Some(definition) = first_text_in(block, ".df")? else {
+                    continue;
+                };
+                let examples = all_text_in(block, ".ex")?
+                    .iter()
+                    // A grammar label before an example renders as ": ".
+                    .map(|example| clean_sentence(example.trim_start_matches([':', ' '])))
+                    .filter(|example| !example.is_empty())
+                    .collect();
+
+                definitions.push(VocabDefinition {
+                    id: 0,
+                    definition: clean_sentence(&definition)
+                        .trim_end_matches('.')
+                        .to_string(),
+                    examples,
+                });
+            }
+
+            if !definitions.is_empty() {
+                entries.push(VocabEntry {
+                    part_of_speech,
+                    pron_uk: String::new(),
+                    pron_us: pron_us.clone(),
+                    sense_groups: vec![VocabSenseGroup {
+                        guide_word: String::new(),
+                        definitions,
+                    }],
+                });
+            }
+        }
+    }
+
+    Ok(entries)
+}
+
+fn has_text_in(element: ElementRef<'_>, query: &str) -> bool {
+    matches!(first_text_in(element, query), Ok(Some(_)))
 }
 
 fn fetch_from_cambridge(word: &str) -> Result<Vec<VocabEntry>, String> {
@@ -453,6 +573,68 @@ fn parse_dictionary_api(api_entries: Vec<ApiEntry>) -> Vec<VocabEntry> {
 mod tests {
     use super::*;
 
+    /// Oxford's markup as Dictionary.app returns it, trimmed, with invented
+    /// text in place of the real entries.
+    const MACOS_MULTI_SENSE: &str = r#"<html><body><d:entry d:title="zorp" class="entry">
+<span class="hg x_xh0"><span class="hw">zorp </span><span class="prx"> | <span d:prn="US" class="ph t_respell">zôrp</span> | </span></span>
+<span class="sg">
+<span class="se1 x_xd0"><span class="posg x_xdh"><span d:pos="1" class="pos"><span class="gp tg_pos">verb </span></span><span class="infg">(<span class="inf">zorps</span>)</span></span>
+<span class="se2 x_xd1 hasSn"><span class="gp sn">1 </span>
+<span class="msDict x_xd1sub t_first"><span class="gg">[no object] </span><span class="df">move in a wobbly way</span><span class="gp tg_df">: </span><span class="eg"><span class="ex"> the jelly zorped</span><span class="gp tg_eg"> | </span></span><span class="eg"><span class="gg">[with object]</span><span class="ex"><span class="lbl">:  </span>she zorped the tray</span><span class="gp tg_eg">. </span></span></span>
+<span class="msDict x_xd1sub hasSn t_subsense"><span class="gp sn">• </span><span class="df">wobble for fun</span>: <span class="eg"><span class="ex"> kids zorp</span></span></span>
+</span>
+<span class="se2 x_xd1 hasSn"><span class="gp sn">2 </span>
+<span class="msDict x_xd1sub t_first"><span class="lg"><span class="sj">Sport </span></span><span class="df">score by wobbling<span class="gp tg_df">. </span></span></span>
+</span>
+</span>
+<span class="se1 x_xd0"><span class="posg x_xdh"><span class="pos"><span class="gp tg_pos">noun </span></span></span>
+<span class="msDict x_xd1 t_core"><span class="df">a wobbly movement</span>: <span class="eg"><span class="ex"> a sudden zorp</span></span></span>
+</span>
+</span>
+<span class="subEntryBlock x_xo0 t_phrases"><span class="subEntry"><span class="l">zorp around</span><span class="msDict x_xo2 t_core"><span class="df">a phrase sense</span></span></span></span>
+</d:entry></body></html>"#;
+
+    #[test]
+    fn parses_macos_dictionary_entry() {
+        let entries = parse_macos_dictionary(&[MACOS_MULTI_SENSE.to_string()]).expect("parse");
+
+        assert_eq!(entries.len(), 2);
+        let verb = &entries[0];
+        assert_eq!(verb.part_of_speech, "verb");
+        assert_eq!(verb.pron_us, "/zôrp/");
+        assert_eq!(verb.pron_uk, "");
+        assert_eq!(verb.sense_groups.len(), 1);
+        assert_eq!(verb.sense_groups[0].guide_word, "");
+
+        // One definition per numbered sense: the subsense is dropped, labels
+        // and punctuation are not part of the text.
+        let definitions = &verb.sense_groups[0].definitions;
+        assert_eq!(definitions.len(), 2);
+        assert_eq!(definitions[0].definition, "move in a wobbly way");
+        assert_eq!(
+            definitions[0].examples,
+            vec!["the jelly zorped", "she zorped the tray"]
+        );
+        assert_eq!(definitions[1].definition, "score by wobbling");
+        assert!(definitions[1].examples.is_empty());
+
+        // A single-sense part of speech has no numbered senses; the phrase
+        // block outside `.se1` is skipped.
+        let noun = &entries[1];
+        assert_eq!(noun.part_of_speech, "noun");
+        let noun_definitions = &noun.sense_groups[0].definitions;
+        assert_eq!(noun_definitions.len(), 1);
+        assert_eq!(noun_definitions[0].definition, "a wobbly movement");
+        assert_eq!(noun_definitions[0].examples, vec!["a sudden zorp"]);
+    }
+
+    #[test]
+    fn macos_dictionary_homographs_become_separate_entries() {
+        let records = vec![MACOS_MULTI_SENSE.to_string(), MACOS_MULTI_SENSE.to_string()];
+        let entries = parse_macos_dictionary(&records).expect("parse");
+        assert_eq!(entries.len(), 4);
+    }
+
     #[test]
     fn sentences_lose_the_gaps_left_by_nested_markup() {
         assert_eq!(
@@ -662,13 +844,8 @@ mod tests {
 mod live_tests {
     use super::*;
 
-    #[test]
-    #[ignore = "requires network access"]
-    fn cambridge_is_reachable_and_still_parses() {
-        let fetched = fetch_word("serendipity").expect("fetch");
-        println!("source = {:?}", fetched.source);
-
-        for entry in &fetched.entries {
+    fn print_entries(entries: &[VocabEntry]) {
+        for entry in entries {
             println!(
                 "{} uk={} us={}",
                 entry.part_of_speech, entry.pron_uk, entry.pron_us
@@ -676,16 +853,32 @@ mod live_tests {
             for group in &entry.sense_groups {
                 println!("  guide={:?}", group.guide_word);
                 for definition in &group.definitions {
-                    println!("    {}", definition.definition);
+                    println!("    {} {:?}", definition.definition, definition.examples);
                 }
             }
         }
+    }
 
-        assert_eq!(
-            fetched.source,
-            WordSource::Cambridge,
-            "fell back to dictionaryapi.dev — Cambridge is blocked or its markup changed"
-        );
-        assert!(!fetched.entries.is_empty());
+    #[test]
+    #[ignore = "requires network access"]
+    fn cambridge_is_reachable_and_still_parses() {
+        // Called directly: `fetch_word` tries the macOS dictionary first.
+        let entries = fetch_from_cambridge("serendipity")
+            .expect("Cambridge is blocked or its markup changed");
+        print_entries(&entries);
+        assert!(!entries.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "reads the dictionaries installed on this Mac"]
+    fn macos_dictionary_is_readable_and_still_parses() {
+        for word in ["serendipity", "run", "bank"] {
+            let entries = fetch_from_macos_dictionary(word)
+                .expect("the private functions changed or the dictionary is missing");
+            println!("== {word}");
+            print_entries(&truncate_entries(entries.clone()));
+            assert!(!entries.is_empty(), "no entries for {word}");
+        }
     }
 }

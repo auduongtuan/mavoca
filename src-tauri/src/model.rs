@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WordSource {
+    /// The Oxford dictionary installed with macOS.
+    MacosDictionary,
     Cambridge,
     Dictionaryapi,
     Manual,
@@ -13,6 +15,7 @@ pub enum WordSource {
 impl WordSource {
     pub fn as_str(self) -> &'static str {
         match self {
+            WordSource::MacosDictionary => "macos",
             WordSource::Cambridge => "cambridge",
             WordSource::Dictionaryapi => "dictionaryapi",
             WordSource::Manual => "manual",
@@ -21,6 +24,7 @@ impl WordSource {
 
     pub fn from_str(value: &str) -> Self {
         match value {
+            "macos" => WordSource::MacosDictionary,
             "cambridge" => WordSource::Cambridge,
             "dictionaryapi" => WordSource::Dictionaryapi,
             _ => WordSource::Manual,

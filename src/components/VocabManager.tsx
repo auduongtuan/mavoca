@@ -7,6 +7,7 @@ import { VocabTreeEditor, createEmptyEntries } from './VocabTreeEditor';
 import { ConfirmDialog } from './ui/ConfirmDialog';
 
 const sourceLabels: Record<WordSource, string> = {
+  macos: 'Oxford (macOS)',
   cambridge: 'Cambridge',
   dictionaryapi: 'dictionaryapi.dev',
   manual: 'Manual',

@@ -66,6 +66,8 @@ and `src-tauri/tauri.conf.json`.
   definition rows the schema stores.
 - `src-tauri/src/dictionary.rs` fetches and parses dictionary sources. It has
   no database or Tauri dependencies.
+- `src-tauri/src/macos_dictionary.rs` and `src-tauri/native/` read the
+  dictionaries installed with macOS; `build.rs` compiles the C bridge.
 - `src-tauri/tauri.conf.json` configures windows, tray, dev URL, build hooks,
   bundle metadata, and macOS private API access.
 - `src-tauri/capabilities/default.json` must include every window label that
@@ -89,8 +91,8 @@ Tables:
 - `vocabs`
   - `id INTEGER PRIMARY KEY`
   - `word TEXT NOT NULL UNIQUE COLLATE NOCASE`
-  - `source TEXT NOT NULL DEFAULT 'manual'` — `cambridge`, `dictionaryapi`, or
-    `manual`
+  - `source TEXT NOT NULL DEFAULT 'manual'` — `macos`, `cambridge`,
+    `dictionaryapi`, or `manual`
   - `created_at TEXT NOT NULL DEFAULT (datetime('now'))`
   - `updated_at TEXT NOT NULL DEFAULT (datetime('now'))`
 - `vocab_definitions` — one row per definition
@@ -173,7 +175,38 @@ key is `backup_path`.
 ## Dictionary Lookup
 
 Lookup lives in `src-tauri/src/dictionary.rs`, not in the original Node API.
-It uses:
+`fetch_word` tries three sources in order and the word's `source` records
+which answered:
+
+1. The New Oxford American Dictionary installed with macOS (`macos`).
+2. Cambridge (`cambridge`).
+3. `api.dictionaryapi.dev` (`dictionaryapi`).
+
+### macOS dictionary
+
+The public DictionaryServices call only returns plain text from the default
+dictionary, so `native/dictionary_services.c` uses the private functions
+Dictionary.app uses (`DCSCopyAvailableDictionaries`,
+`DCSCopyRecordsForSearchString`, `DCSRecordCopyData`, and friends) to pick the
+dictionary by name and get each entry as HTML.
+
+- They are found with `dlsym` at runtime, never linked. A macOS release that
+  drops or renames one makes every lookup return `Unavailable`, and
+  `fetch_word` falls through to the online sources. Do not link them directly:
+  a missing symbol would then stop the app launching.
+- The bridge keeps only records whose headword is the word itself; a search
+  also returns phrases and derivatives.
+- `parse_macos_dictionary` takes the first definition of each numbered sense
+  (`.se2`) and drops the "•" subsenses, phrases, and derivatives. Oxford has
+  no guide words and no UK pronunciation; its US pronunciation is Oxford's own
+  respelling (`/baNGk/`), not IPA.
+- The parser test uses invented text in Oxford's markup. Keep real dictionary
+  content out of the repo. To inspect live markup:
+  `cd src-tauri && MAVOCA_WORD=run cargo test dump_macos_entries -- --ignored --nocapture`
+
+### Online sources
+
+The online sources use:
 
 - `reqwest` blocking client with `rustls-tls`
 - `scraper` for HTML parsing
@@ -201,9 +234,10 @@ definitions. Both are network calls made before the database lock is taken.
 
 Scraped markup is not a stable contract. Selectors have looser fallbacks, and an
 entry that yields no definitions is skipped rather than failing the whole fetch.
-`parse_cambridge` is covered by a fixture test; a `#[ignore]`d live test in
-`dictionary::live_tests` checks whether Cambridge is still reachable and still
-parses:
+`parse_cambridge` and `parse_macos_dictionary` are covered by fixture tests;
+`#[ignore]`d live tests in `dictionary::live_tests` check whether Cambridge is
+still reachable and whether the macOS dictionary is still readable, and that
+both still parse:
 
 ```bash
 cd src-tauri && cargo test -- --ignored --nocapture
@@ -332,7 +366,7 @@ bun run build
 ```
 
 `cargo test` covers the legacy migration, the tree round-trip through SQLite,
-the delete cascade, card flattening, and both parsers. Run it after any change
+the delete cascade, card flattening, and the dictionary parsers. Run it after any change
 to the schema, the tree model, or the dictionary parsing.
 
 Use `bun run tauri dev` when behavior must be verified interactively in the

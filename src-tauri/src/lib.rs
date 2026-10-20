@@ -1,4 +1,6 @@
 mod dictionary;
+#[cfg(target_os = "macos")]
+mod macos_dictionary;
 mod model;
 mod translator;
 

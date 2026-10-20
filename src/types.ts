@@ -1,4 +1,5 @@
-export type WordSource = 'cambridge' | 'dictionaryapi' | 'manual';
+/** `macos` is the Oxford dictionary installed with macOS. */
+export type WordSource = 'macos' | 'cambridge' | 'dictionaryapi' | 'manual';
 
 export interface VocabDefinition {
   id: number;
