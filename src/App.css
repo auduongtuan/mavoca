@@ -46,6 +46,8 @@ html, body {
  * the card must not size itself from the window.
  */
 .vocab-card {
+  /* Shared by the meaning stepper and the VI toggle so they line up. */
+  --meta-btn-size: 20px;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -59,14 +61,31 @@ html, body {
 
 .word-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 5px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   padding-bottom: 12px;
-  gap: 10px;
 }
 
-.word-title {
+.word-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* The stepper changes the part of speech and the transcription, so it sits on
+   the word's line and both of those follow it. */
+.word-header .meaning-stepper {
+  flex-shrink: 0;
+}
+
+.word-entry {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -105,10 +124,55 @@ html, body {
 }
 
 .word-pronunciation {
-  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
   color: #787774;
   font-size: 12px;
   font-weight: 600;
+}
+
+.pronunciation {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* The accent only earns a label when the card carries both, which is the one
+   case where two of these sit side by side. */
+.pronunciation-accent {
+  color: rgba(55, 53, 47, 0.42);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.pronunciation-ipa {
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.pronunciation-speak {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  margin-left: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.42);
+  cursor: pointer;
+}
+
+.pronunciation-speak:hover {
+  background: rgba(55, 53, 47, 0.07);
+  color: #37352f;
 }
 
 .category {
@@ -147,8 +211,6 @@ html, body {
 }
 
 .card-meta {
-  /* Shared by the meaning stepper and the VI toggle so they line up. */
-  --meta-btn-size: 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1226,6 +1288,19 @@ html, body {
 
   .word-pronunciation {
     color: #9b9a97;
+  }
+
+  .pronunciation-accent {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .pronunciation-speak {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .pronunciation-speak:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
   }
 
   .example-text {

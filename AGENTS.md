@@ -306,6 +306,9 @@ English. Nothing is stored.
   does not propagate, and without it the app aborts at launch with
   `Library not loaded: @rpath/libswift_Concurrency.dylib`.
 - `App.tsx` keys `VocabCard` by card, so a new card starts untranslated.
+  `VocabCard` keeps a session cache keyed by word, part of speech, and
+  definition, so stepping through a word's definitions keeps the meaning it
+  already fetched instead of blanking until Rust answers again.
 
 ## Tray And Window Behavior
 

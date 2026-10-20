@@ -41,8 +41,9 @@ const abbreviatePartOfSpeech = (partOfSpeech: string) =>
 const canSpeak =typeof window !== 'undefined' && 'speechSynthesis' in window;
 
 /**
- * Speaks the word with a built-in macOS voice. The card shows the UK
- * pronunciation when it has one, so the voice follows the same accent.
+ * Speaks the word with a built-in macOS voice. The card shows the UK and US
+ * pronunciations of the entry the definition belongs to, so each one is read
+ * in its own accent.
  */
 const speakWord = (word: string, lang: string) => {
   const synth = window.speechSynthesis;
@@ -57,6 +58,43 @@ const speakWord = (word: string, lang: string) => {
   }
   synth.speak(utterance);
 };
+
+/**
+ * One accent the card can show. Cambridge entry rows carry both; the macOS
+ * dictionary only one, which is why the accent label appears only when the two
+ * differ.
+ */
+interface Pronunciation {
+  accent: 'UK' | 'US';
+  ipa: string;
+  lang: string;
+}
+
+const pronunciationsOf = (card: VocabCardData): Pronunciation[] => {
+  const uk: Pronunciation | null = card.pronUk
+    ? { accent: 'UK', ipa: card.pronUk, lang: UK_VOICE_LANG }
+    : null;
+  const us: Pronunciation | null = card.pronUs
+    ? { accent: 'US', ipa: card.pronUs, lang: US_VOICE_LANG }
+    : null;
+
+  if (uk && us && uk.ipa === us.ipa) {
+    return [uk];
+  }
+
+  return [uk, us].filter((pronunciation): pronunciation is Pronunciation => pronunciation !== null);
+};
+
+/**
+ * Keeps the Vietnamese of the definitions stepped through in this session.
+ * Stepping remounts the card, and without it the meaning would blank out while
+ * Rust answered again; that happens on every definition of a word.
+ */
+const translationCache = new Map<string, CardTranslation>();
+const MAX_CACHED_TRANSLATIONS = 200;
+
+const translationKey = (card: VocabCardData) =>
+  `${card.word}\u0000${card.partOfSpeech}\u0000${card.definition}`;
 
 interface VocabCardProps {
   card: VocabCardData;
@@ -77,11 +115,15 @@ export const VocabCard: React.FC<VocabCardProps> = ({
   onRandom,
   onManage
 }) => {
-  const pronunciation = card.pronUk || card.pronUs;
+  const pronunciations = pronunciationsOf(card);
+  const cardKey = translationKey(card);
   const cardRef = useRef<HTMLDivElement>(null);
   usePopupAutoResize(cardRef);
-  // The parent keys this component by card, so a new card starts untranslated.
-  const [translation, setTranslation] = useState<CardTranslation | null>(null);
+  // The parent keys this component by card, so a new card starts untranslated —
+  // unless this session already translated that definition.
+  const [translation, setTranslation] = useState<CardTranslation | null>(
+    () => translationCache.get(cardKey) ?? null,
+  );
   const [showTranslation, setShowTranslation] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [translateError, setTranslateError] = useState<string | null>(null);
@@ -90,27 +132,39 @@ export const VocabCard: React.FC<VocabCardProps> = ({
   // One call gives both the Lạc Việt meaning, shown on the card by default,
   // and the translated definition behind VI. Picking the Lạc Việt sense needs
   // the translated definition, which takes about a second, longer after the
-  // translator's model was unloaded; Rust caches the result.
+  // translator's model was unloaded; Rust caches the result too.
   const loadTranslation = useCallback(async () => {
     if (requestedTranslation.current) {
       return;
     }
     requestedTranslation.current = true;
+
+    const cached = translationCache.get(cardKey);
+    if (cached) {
+      setTranslation(cached);
+      return;
+    }
+
     setTranslating(true);
     setTranslateError(null);
     try {
-      setTranslation(await invoke<CardTranslation>('translate_card', {
+      const result = await invoke<CardTranslation>('translate_card', {
         word: card.word,
         partOfSpeech: card.partOfSpeech,
         definition: card.definition,
-      }));
+      });
+      setTranslation(result);
+      if (translationCache.size >= MAX_CACHED_TRANSLATIONS) {
+        translationCache.clear();
+      }
+      translationCache.set(cardKey, result);
     } catch (err) {
       requestedTranslation.current = false;
       setTranslateError(err instanceof Error ? err.message : String(err));
     } finally {
       setTranslating(false);
     }
-  }, [card.word, card.partOfSpeech, card.definition]);
+  }, [cardKey, card.word, card.partOfSpeech, card.definition]);
 
   // Load while the popup is open; the hidden rotation every few seconds
   // mounts cards nobody sees, and those are skipped.
@@ -142,13 +196,13 @@ export const VocabCard: React.FC<VocabCardProps> = ({
   return (
     <div className="vocab-card" ref={cardRef}>
       <div className="word-header">
-        <div className="word-title">
+        <div className="word-header-top">
           <div className="word-line">
             <h1 className="word">{card.word}</h1>
-            {canSpeak && (
+            {canSpeak && pronunciations.length === 0 && (
               <button
                 className="speak-btn"
-                onClick={() => speakWord(card.word, card.pronUk ? UK_VOICE_LANG : US_VOICE_LANG)}
+                onClick={() => speakWord(card.word, US_VOICE_LANG)}
                 title="Pronounce"
                 aria-label={`Pronounce ${card.word}`}
               >
@@ -156,32 +210,9 @@ export const VocabCard: React.FC<VocabCardProps> = ({
               </button>
             )}
           </div>
-          {pronunciation && (
-            <p className="word-pronunciation">{pronunciation}</p>
-          )}
-        </div>
-        <span
-          className="category"
-          data-pos={normalizePartOfSpeech(card.partOfSpeech).replace(/\s+/g, '-')}
-          title={card.partOfSpeech}
-        >
-          {abbreviatePartOfSpeech(card.partOfSpeech)}
-        </span>
-      </div>
-
-      <div className="card-meta">
-        <button
-          onClick={toggleTranslation}
-          className={showTranslation ? 'translate-btn active' : 'translate-btn'}
-          title={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese on this Mac'}
-          aria-label={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese'}
-          aria-pressed={showTranslation}
-        >
-          <Translate size={12} weight="bold" aria-hidden />
-          VI
-        </button>
-        <div className="card-meta-end">
-          {card.guideWord && <span className="guide-word">{card.guideWord}</span>}
+          {/* Above the part of speech and the transcription, which it changes:
+              stepping the definitions steps the entry, not only the text below
+              the divider. */}
           {card.total > 1 && (
             <div className="meaning-stepper">
               <button
@@ -205,6 +236,53 @@ export const VocabCard: React.FC<VocabCardProps> = ({
               </button>
             </div>
           )}
+        </div>
+        <div className="word-entry">
+          <span
+            className="category"
+            data-pos={normalizePartOfSpeech(card.partOfSpeech).replace(/\s+/g, '-')}
+            title={card.partOfSpeech}
+          >
+            {abbreviatePartOfSpeech(card.partOfSpeech)}
+          </span>
+          {pronunciations.length > 0 && (
+            <p className="word-pronunciation">
+              {pronunciations.map(({ accent, ipa, lang }) => (
+                <span className="pronunciation" key={accent}>
+                  {pronunciations.length > 1 && (
+                    <span className="pronunciation-accent">{accent}</span>
+                  )}
+                  <span className="pronunciation-ipa">{ipa}</span>
+                  {canSpeak && (
+                    <button
+                      className="pronunciation-speak"
+                      onClick={() => speakWord(card.word, lang)}
+                      title={`Pronounce in ${accent} English`}
+                      aria-label={`Pronounce ${card.word} in ${accent} English`}
+                    >
+                      <SpeakerHigh size={12} weight="bold" aria-hidden />
+                    </button>
+                  )}
+                </span>
+              ))}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="card-meta">
+        <button
+          onClick={toggleTranslation}
+          className={showTranslation ? 'translate-btn active' : 'translate-btn'}
+          title={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese on this Mac'}
+          aria-label={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese'}
+          aria-pressed={showTranslation}
+        >
+          <Translate size={12} weight="bold" aria-hidden />
+          VI
+        </button>
+        <div className="card-meta-end">
+          {card.guideWord && <span className="guide-word">{card.guideWord}</span>}
         </div>
       </div>
 
