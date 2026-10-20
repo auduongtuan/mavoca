@@ -55,13 +55,22 @@ export interface AppSettings {
   backupPath: string;
   /** Accelerator such as `Cmd+Ctrl+Shift+N`; empty when disabled. */
   addWordShortcut: string;
+  /** Seconds between words while the popup is hidden; 0 turns rotation off. */
+  rotationIntervalSecs: number;
 }
 
 /** The popup's Vietnamese, from the `translate_card` command. */
 export interface CardTranslation {
-  /** The word's meaning: from Lạc Việt when it has the word, else translated. */
+  /** Lạc Việt's sense for the card; null when it does not have the word. */
+  meaning: DictionaryMeaning | null;
+  /** The word machine translated; only filled when `meaning` is null. */
   word: string;
   /** The definition, translated; empty when the translator is unavailable. */
   definition: string;
-  fromDictionary: boolean;
+}
+
+/** "bờ; dải (dải đất dọc theo hai bên bờ sông)" split at the parenthesis. */
+export interface DictionaryMeaning {
+  headline: string;
+  explanation: string;
 }

@@ -47,7 +47,7 @@ and `src-tauri/tauri.conf.json`.
 - `src/components/VocabTreeEditor.tsx` edits the three-level tree: entries,
   guide-word sense groups, and definitions with their examples.
 - `src/components/SettingsPanel.tsx` renders the open-at-login toggle, the
-  add-word shortcut, and the backup path settings UI.
+  add-word shortcut, the rotation interval, and the backup path settings UI.
 - `src/components/ShortcutRecorder.tsx` records a key combination as an
   accelerator string such as `Cmd+Ctrl+Shift+N` and displays it as `⌃⇧⌘N`.
 - `src/components/QuickAdd.tsx` takes a single word and calls `add_vocab_word`,
@@ -245,9 +245,11 @@ cd src-tauri && cargo test -- --ignored --nocapture
 
 ## Translation
 
-The popup's VI button shows the word and its definition in Vietnamese through
-the `translate_card` command, which `src-tauri/src/vietnamese.rs` implements.
-Examples stay in English. Nothing is stored; it is looked up on each press.
+Every popup card shows the word's Vietnamese meaning from Lạc Việt under the
+definition, and the VI button adds the definition translated into Vietnamese.
+Both come from one `translate_card` call, which `src-tauri/src/vietnamese.rs`
+implements, made whenever the popup is open on a card. Examples stay in
+English. Nothing is stored.
 
 - The definition goes through Apple's on-device Translation framework, via the
   `translation-rs` crate. It is free, offline, and private, but the English and
@@ -260,15 +262,17 @@ Examples stay in English. Nothing is stored; it is looked up on each press.
   `pick_sense` chooses the one sharing the most syllables with the translated
   definition, because Lạc Việt numbers senses differently from Oxford or
   Cambridge. Fewer than `MIN_SENSE_OVERLAP` shared syllables keeps the first,
-  most common sense. When Lạc Việt has no entry, the word is machine
-  translated; when the translator fails but Lạc Việt has the word, the card
-  shows the word without a translated definition.
+  most common sense. The sense is returned as `meaning`, split into its
+  headline ("bờ; dải") and the explanation in parentheses after it. When Lạc
+  Việt has no entry, `meaning` is null and the word is machine translated,
+  shown only under VI; when the translator fails but Lạc Việt has the word,
+  the card shows its first sense with no translated definition.
 - The translator takes about a second per sentence and five or more after its
-  model has been unloaded. So `VocabCard` calls `translate_card` in the
-  background whenever the popup is open on a card, results are cached in
-  `vietnamese.rs`, and the cache lock is held for a whole translation, so a VI
-  press during that prefetch waits for it instead of translating twice. The
-  word is only machine translated when Lạc Việt lacks it.
+  model has been unloaded, and picking the sense waits on it, so the meaning
+  appears a moment after the card. Results are cached in `vietnamese.rs`, and
+  the cache lock is held for a whole translation, so overlapping calls for a
+  card wait for the first instead of translating twice. The word is only
+  machine translated when Lạc Việt lacks it.
 - Lạc Việt is not saved with the word: the lookup is local and instant, its
   senses do not line up with the stored ones, and saving would copy licensed
   dictionary text into the backup.
@@ -313,7 +317,12 @@ Examples stay in English. Nothing is stored; it is looked up on each press.
   beyond that `.app` scrolls. `.vocab-card` must keep its natural height — if it
   sizes from the window again (`height: 100%`, `flex: 1`), the measurement feeds
   back into itself and the window can never shrink.
-- Auto-rotation runs every 10 seconds only while the popup is hidden.
+- Auto-rotation steps to the next definition every `rotation_interval_secs`
+  seconds (default `DEFAULT_ROTATION_INTERVAL_SECS`, 10; 0 turns it off),
+  counting only time the popup is hidden: opening the popup resets the count,
+  so the word never changes the moment it closes. The thread checks once per
+  `ROTATION_TICK` and reads the interval from `AppState`, so a change in
+  Settings applies without a restart.
 - The rotation unit is a single definition, not a word. Rust owns the flattened
   card list in `AppState.cards`, and `current_index` indexes into it. Prev/Next
   walk every definition of a word before moving to the next word. The ‹ ›

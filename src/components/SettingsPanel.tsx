@@ -7,8 +7,19 @@ const defaultDropboxPath = '~/Dropbox/Vocab Learning/vocab.sqlite3';
 // Mirrors DEFAULT_ADD_WORD_SHORTCUT in lib.rs.
 const defaultAddWordShortcut = 'Cmd+Ctrl+Shift+N';
 
+const rotationIntervalOptions = [
+  { seconds: 0, label: 'Off' },
+  { seconds: 5, label: 'Every 5 seconds' },
+  { seconds: 10, label: 'Every 10 seconds' },
+  { seconds: 30, label: 'Every 30 seconds' },
+  { seconds: 60, label: 'Every minute' },
+  { seconds: 300, label: 'Every 5 minutes' },
+  { seconds: 900, label: 'Every 15 minutes' },
+  { seconds: 3600, label: 'Every hour' },
+];
+
 export const SettingsPanel: React.FC = () => {
-  const [settings, setSettings] = useState<AppSettings>({ backupPath: '', addWordShortcut: '' });
+  const [settings, setSettings] = useState<AppSettings>({ backupPath: '', addWordShortcut: '', rotationIntervalSecs: 10 });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -107,6 +118,30 @@ export const SettingsPanel: React.FC = () => {
             </button>
           </div>
           <p>Works from any app. Click the box, then press the keys you want.</p>
+        </div>
+
+        <div className="settings-field">
+          <label htmlFor="rotationInterval">Change word</label>
+          <select
+            id="rotationInterval"
+            value={settings.rotationIntervalSecs}
+            onChange={(event) => setSettings({
+              ...settings,
+              rotationIntervalSecs: Number(event.target.value),
+            })}
+            disabled={loading || busy}
+          >
+            {/* Keep a value set outside this list, e.g. in the database, selectable. */}
+            {!rotationIntervalOptions.some(({ seconds }) => seconds === settings.rotationIntervalSecs) && (
+              <option value={settings.rotationIntervalSecs}>
+                Every {settings.rotationIntervalSecs} seconds
+              </option>
+            )}
+            {rotationIntervalOptions.map(({ seconds, label }) => (
+              <option key={seconds} value={seconds}>{label}</option>
+            ))}
+          </select>
+          <p>How often the menu bar word changes. It waits while the popup is open.</p>
         </div>
 
         <div className="settings-field">

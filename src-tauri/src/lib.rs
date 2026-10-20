@@ -9,6 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, fs};
@@ -29,7 +30,14 @@ const DEFAULT_ADD_WORD_SHORTCUT: &str = "Cmd+Ctrl+Shift+N";
 const QUICK_ADD_WINDOW_LABEL: &str = "quick-add";
 const TRAY_OPEN_MANAGER_ID: &str = "open-manager";
 const TRAY_OPEN_SETTINGS_ID: &str = "open-settings";
-const AUTO_ROTATION_INTERVAL_SECS: u64 = 10;
+const ROTATION_INTERVAL_SETTING: &str = "rotation_interval_secs";
+/// Seconds between words while the popup is hidden; 0 turns rotation off.
+const DEFAULT_ROTATION_INTERVAL_SECS: u64 = 10;
+/// Upper bound accepted from the settings window, one hour.
+const MAX_ROTATION_INTERVAL_SECS: u64 = 3600;
+/// How often the rotation thread checks the popup and the interval, so a new
+/// interval or a closed popup takes effect within a second.
+const ROTATION_TICK: Duration = Duration::from_secs(1);
 /// Logical popup width; matches `width` for the `main` window in tauri.conf.json.
 const POPUP_WIDTH: f64 = 320.0;
 /// The popup grows to fit its card between these heights, then scrolls.
@@ -52,6 +60,8 @@ struct SeedVocabWord {
 struct AppSettings {
     backup_path: String,
     add_word_shortcut: String,
+    /// 0 turns rotation off.
+    rotation_interval_secs: u64,
 }
 
 #[derive(Clone)]
@@ -65,6 +75,8 @@ struct AppState {
     cards: Arc<Mutex<Vec<VocabCard>>>,
     current_index: Arc<Mutex<usize>>,
     is_window_visible: Arc<Mutex<bool>>,
+    /// Mirrors the `rotation_interval_secs` setting for the rotation thread.
+    rotation_interval_secs: Arc<AtomicU64>,
 }
 
 fn load_seed_vocab() -> Vec<SeedVocabWord> {
@@ -457,6 +469,14 @@ fn ensure_default_settings(conn: &Connection) -> Result<(), String> {
         set_setting(conn, BACKUP_PATH_SETTING, &backup_path)?;
     }
 
+    if get_setting(conn, ROTATION_INTERVAL_SETTING)?.is_none() {
+        set_setting(
+            conn,
+            ROTATION_INTERVAL_SETTING,
+            &DEFAULT_ROTATION_INTERVAL_SECS.to_string(),
+        )?;
+    }
+
     if get_setting(conn, ADD_WORD_SHORTCUT_SETTING)?.is_none() {
         set_setting(conn, ADD_WORD_SHORTCUT_SETTING, DEFAULT_ADD_WORD_SHORTCUT)?;
     }
@@ -468,6 +488,9 @@ fn load_settings_from_db(conn: &Connection) -> Result<AppSettings, String> {
     Ok(AppSettings {
         backup_path: get_setting(conn, BACKUP_PATH_SETTING)?.unwrap_or_default(),
         add_word_shortcut: get_setting(conn, ADD_WORD_SHORTCUT_SETTING)?.unwrap_or_default(),
+        rotation_interval_secs: get_setting(conn, ROTATION_INTERVAL_SETTING)?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_ROTATION_INTERVAL_SECS),
     })
 }
 
@@ -924,6 +947,12 @@ fn update_settings(
     app: tauri::AppHandle,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
+    if settings.rotation_interval_secs > MAX_ROTATION_INTERVAL_SECS {
+        return Err(format!(
+            "Rotation can wait at most {MAX_ROTATION_INTERVAL_SECS} seconds"
+        ));
+    }
+
     let conn = state.db.lock().unwrap();
     let shortcut = settings.add_word_shortcut.trim();
     if let Err(err) = register_add_word_shortcut(&app, shortcut) {
@@ -933,6 +962,14 @@ fn update_settings(
         return Err(err);
     }
     set_setting(&conn, ADD_WORD_SHORTCUT_SETTING, shortcut)?;
+    set_setting(
+        &conn,
+        ROTATION_INTERVAL_SETTING,
+        &settings.rotation_interval_secs.to_string(),
+    )?;
+    state
+        .rotation_interval_secs
+        .store(settings.rotation_interval_secs, Ordering::Relaxed);
     set_setting(&conn, BACKUP_PATH_SETTING, settings.backup_path.trim())?;
     sync_database_backup(&conn)?;
     load_settings_from_db(&conn)
@@ -1039,7 +1076,7 @@ fn add_vocab_word_blocking(
     app: &tauri::AppHandle,
     word: &str,
 ) -> Result<VocabWord, String> {
-    let clean_word = normalize_text(&word);
+    let clean_word = normalize_text(word);
     if clean_word.is_empty() {
         return Err("Enter a word to add".into());
     }
@@ -1337,21 +1374,35 @@ fn position_popup_at_click(
 }
 
 /// Advances one definition at a time while the popup is hidden.
+///
+/// The interval counts hidden time only: opening the popup resets it, so the
+/// word never changes the moment the popup closes.
 fn start_auto_rotation(app: tauri::AppHandle, state: AppState) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(AUTO_ROTATION_INTERVAL_SECS));
+    std::thread::spawn(move || {
+        let mut hidden_for = Duration::ZERO;
+        loop {
+            std::thread::sleep(ROTATION_TICK);
 
-        if *state.is_window_visible.lock().unwrap() {
-            continue;
+            let interval = state.rotation_interval_secs.load(Ordering::Relaxed);
+            if interval == 0 || *state.is_window_visible.lock().unwrap() {
+                hidden_for = Duration::ZERO;
+                continue;
+            }
+
+            hidden_for += ROTATION_TICK;
+            if hidden_for < Duration::from_secs(interval) {
+                continue;
+            }
+            hidden_for = Duration::ZERO;
+
+            let len = state.cards.lock().unwrap().len();
+            if len == 0 {
+                continue;
+            }
+
+            let index = *state.current_index.lock().unwrap();
+            apply_card_index(&app, &state, (index + 1) % len);
         }
-
-        let len = state.cards.lock().unwrap().len();
-        if len == 0 {
-            continue;
-        }
-
-        let index = *state.current_index.lock().unwrap();
-        apply_card_index(&app, &state, (index + 1) % len);
     });
 }
 
@@ -1427,12 +1478,14 @@ pub fn run() {
             let conn = init_database(app.handle())?;
             let initial_vocab = list_vocab_from_db(&conn)?;
             let initial_cards = build_cards(&initial_vocab);
+            let rotation_interval_secs = load_settings_from_db(&conn)?.rotation_interval_secs;
             let app_state = AppState {
                 db: Arc::new(Mutex::new(conn)),
                 vocab_list: Arc::new(Mutex::new(initial_vocab)),
                 cards: Arc::new(Mutex::new(initial_cards)),
                 current_index: Arc::new(Mutex::new(0)),
                 is_window_visible: Arc::new(Mutex::new(false)),
+                rotation_interval_secs: Arc::new(AtomicU64::new(rotation_interval_secs)),
             };
 
             if let Some(card) = current_card(&app_state) {

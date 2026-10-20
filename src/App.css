@@ -241,6 +241,19 @@ html, body {
   line-height: 1.5;
 }
 
+/* Lạc Việt's meaning, shown on every card that has one. */
+.vocab-card .dictionary-meaning {
+  margin-top: 4px;
+  color: rgba(55, 53, 47, 0.72);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.vocab-card .dictionary-meaning strong {
+  color: #37352f;
+  font-weight: 600;
+}
+
 .vocab-card .word-translation {
   font-weight: 600;
 }
@@ -479,6 +492,7 @@ html, body {
 .manager-search,
 .lookup-bar input,
 .settings-field input,
+.settings-field select,
 .form-grid input,
 .form-grid select,
 .form-grid textarea,
@@ -510,6 +524,7 @@ html, body {
 .manager-search,
 .lookup-bar input,
 .settings-field input,
+.settings-field select,
 .form-grid input,
 .form-grid select,
 .tree-field input,
@@ -551,6 +566,7 @@ html, body {
 .manager-search:focus,
 .lookup-bar input:focus,
 .settings-field input:focus,
+.settings-field select:focus,
 .form-grid input:focus,
 .form-grid select:focus,
 .form-grid textarea:focus,
@@ -1308,6 +1324,7 @@ html, body {
   .manager-search,
   .lookup-bar input,
   .settings-field input,
+  .settings-field select,
   .form-grid input,
   .form-grid select,
   .form-grid textarea,
@@ -1334,6 +1351,7 @@ html, body {
   .manager-search:focus,
   .lookup-bar input:focus,
   .settings-field input:focus,
+  .settings-field select:focus,
   .form-grid input:focus,
   .form-grid select:focus,
   .form-grid textarea:focus,
@@ -1488,8 +1506,13 @@ html, body {
     background: rgba(255, 255, 255, 0.08);
   }
 
-  .vocab-card .translation {
+  .vocab-card .translation,
+  .vocab-card .dictionary-meaning {
     color: rgba(227, 226, 224, 0.72);
+  }
+
+  .vocab-card .dictionary-meaning strong {
+    color: #e3e2e0;
   }
 
   .vocab-card .translation-status {

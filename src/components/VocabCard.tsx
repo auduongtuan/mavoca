@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
@@ -85,59 +85,58 @@ export const VocabCard: React.FC<VocabCardProps> = ({
   const [showTranslation, setShowTranslation] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [translateError, setTranslateError] = useState<string | null>(null);
+  const requestedTranslation = useRef(false);
 
-  // Translate in the background while the popup is open, so VI is usually
-  // instant: the translator takes about a second per sentence, and several
-  // seconds after its model was unloaded. Rust caches the result, and a VI
-  // press during the prefetch waits for it rather than starting again. Hidden
-  // rotations every few seconds are skipped. Failures surface on VI instead.
-  useEffect(() => {
-    const appWindow = getCurrentWindow();
-    const prefetch = () => {
-      invoke('translate_card', {
+  // One call gives both the Lạc Việt meaning, shown on the card by default,
+  // and the translated definition behind VI. Picking the Lạc Việt sense needs
+  // the translated definition, which takes about a second, longer after the
+  // translator's model was unloaded; Rust caches the result.
+  const loadTranslation = useCallback(async () => {
+    if (requestedTranslation.current) {
+      return;
+    }
+    requestedTranslation.current = true;
+    setTranslating(true);
+    setTranslateError(null);
+    try {
+      setTranslation(await invoke<CardTranslation>('translate_card', {
         word: card.word,
         partOfSpeech: card.partOfSpeech,
         definition: card.definition,
-      }).catch(() => {});
-    };
+      }));
+    } catch (err) {
+      requestedTranslation.current = false;
+      setTranslateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTranslating(false);
+    }
+  }, [card.word, card.partOfSpeech, card.definition]);
 
-    appWindow.isVisible().then((visible) => visible && prefetch()).catch(() => {});
+  // Load while the popup is open; the hidden rotation every few seconds
+  // mounts cards nobody sees, and those are skipped.
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    appWindow.isVisible().then((visible) => {
+      if (visible) {
+        void loadTranslation();
+      }
+    }).catch(() => {});
     const unlisten = appWindow.onFocusChanged(({ payload: focused }) => {
       if (focused) {
-        prefetch();
+        void loadTranslation();
       }
     });
     return () => {
       unlisten.then((stop) => stop());
     };
-  }, [card.word, card.partOfSpeech, card.definition]);
+  }, [loadTranslation]);
 
-  const toggleTranslation = async () => {
-    if (showTranslation) {
-      setShowTranslation(false);
-      return;
-    }
-    setShowTranslation(true);
-    if (translation) {
-      return;
-    }
-
-    setTranslating(true);
-    setTranslateError(null);
-    try {
-      const result = await invoke<CardTranslation>('translate_card', {
-        word: card.word,
-        partOfSpeech: card.partOfSpeech,
-        definition: card.definition,
-      });
-      setTranslation(result);
-    } catch (err) {
-      setTranslateError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setTranslating(false);
-    }
+  const toggleTranslation = () => {
+    setShowTranslation((shown) => !shown);
+    void loadTranslation();
   };
 
+  const meaning = translation?.meaning;
   const visibleTranslation = showTranslation ? translation : null;
 
   return (
@@ -174,9 +173,8 @@ export const VocabCard: React.FC<VocabCardProps> = ({
         <button
           onClick={toggleTranslation}
           className={showTranslation ? 'translate-btn active' : 'translate-btn'}
-          disabled={translating}
-          title={showTranslation ? 'Hide Vietnamese' : 'Translate to Vietnamese on this Mac'}
-          aria-label={showTranslation ? 'Hide Vietnamese' : 'Translate to Vietnamese'}
+          title={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese on this Mac'}
+          aria-label={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese'}
           aria-pressed={showTranslation}
         >
           <Translate size={12} weight="bold" aria-hidden />
@@ -213,12 +211,15 @@ export const VocabCard: React.FC<VocabCardProps> = ({
       <div className="meaning">
         <p>{card.definition}</p>
         {/* Under the definition rather than in the header, so the header and
-            its divider never move when the translation appears. */}
+            its divider never move when the Vietnamese appears. */}
+        {meaning && (
+          <p className="dictionary-meaning" title="Từ điển Lạc Việt">
+            <strong>{meaning.headline}</strong>
+            {meaning.explanation && ` ${meaning.explanation}`}
+          </p>
+        )}
         {visibleTranslation?.word && (
-          <p
-            className="translation word-translation"
-            title={visibleTranslation.fromDictionary ? 'From Lạc Việt dictionary' : 'Machine translation'}
-          >
+          <p className="translation word-translation" title="Machine translation">
             {visibleTranslation.word}
           </p>
         )}

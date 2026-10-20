@@ -48,16 +48,16 @@ const STOP_SYLLABLES: &[&str] = &[
 /// with "lan nhanh" (spread quickly) but means "chạy", the first sense.
 const MIN_SENSE_OVERLAP: usize = 2;
 
-/// Translated cards kept so a second press of VI, or a press after the popup
-/// prefetched the card, is instant. Cleared rather than evicted when full: it
-/// only has to hold the cards of one session.
+/// Translated cards kept so reopening the popup on a card, or going back to
+/// one, is instant. Cleared rather than evicted when full: it only has to hold
+/// the cards of one session.
 const MAX_CACHED_TRANSLATIONS: usize = 64;
 
 type CacheKey = (String, String, String);
 
-/// Holds the cache, and is held for a whole translation: a VI press that
-/// arrives while the popup's prefetch of the same card is running waits for it
-/// and then reads the cache, instead of translating the card a second time.
+/// Holds the cache, and is held for a whole translation: a second call for a
+/// card that is still being translated waits for the first and then reads the
+/// cache, instead of translating the card again.
 fn translation_cache() -> MutexGuard<'static, HashMap<CacheKey, CardTranslation>> {
     static CACHE: OnceLock<Mutex<HashMap<CacheKey, CardTranslation>>> = OnceLock::new();
     CACHE
@@ -69,13 +69,23 @@ fn translation_cache() -> MutexGuard<'static, HashMap<CacheKey, CardTranslation>
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardTranslation {
-    /// The word's Vietnamese meaning.
+    /// Lạc Việt's sense for this card; `None` when it does not have the word.
+    pub meaning: Option<DictionaryMeaning>,
+    /// The word machine translated, only filled when `meaning` is `None`.
     pub word: String,
     /// The definition in Vietnamese; empty when the translator is unavailable
     /// but the dictionary still had the word.
     pub definition: String,
-    /// True when `word` came from Lạc Việt rather than the translator.
-    pub from_dictionary: bool,
+}
+
+/// A Lạc Việt sense reads "bờ; dải (dải đất dọc theo hai bên bờ sông)": the
+/// meanings, then an explanation in parentheses.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictionaryMeaning {
+    pub headline: String,
+    /// Empty when the sense has no explanation.
+    pub explanation: String,
 }
 
 /// One part of speech in a Lạc Việt entry.
@@ -89,8 +99,9 @@ struct LacVietGroup {
 /// Translates a card, from the cache when it has been done before.
 ///
 /// The translator costs about a second per sentence, and several seconds for
-/// the first one after its model was unloaded, so the popup calls this as soon
-/// as it opens and the VI button usually finds the result waiting.
+/// the first one after its model was unloaded. The popup calls this as soon as
+/// it opens on a card: the Lạc Việt meaning it shows waits on the translated
+/// definition, which picks the sense.
 pub fn translate_card(
     word: &str,
     part_of_speech: &str,
@@ -131,9 +142,9 @@ fn translate_uncached(
         // its most common sense rather than nothing.
         Err(_) if !senses.is_empty() => {
             return Ok(CardTranslation {
-                word: headline(&senses[0]),
+                meaning: Some(split_sense(&senses[0])),
+                word: String::new(),
                 definition: String::new(),
-                from_dictionary: true,
             })
         }
         Err(err) => return Err(err),
@@ -141,18 +152,18 @@ fn translate_uncached(
 
     if let Some(sense) = pick_sense(&senses, &definition_vi) {
         return Ok(CardTranslation {
-            word: headline(sense),
+            meaning: Some(split_sense(sense)),
+            word: String::new(),
             definition: definition_vi,
-            from_dictionary: true,
         });
     }
 
     // Only translate the word itself when Lạc Việt does not have it: it is a
     // second trip through the translator.
     Ok(CardTranslation {
+        meaning: None,
         word: translate_one(word)?,
         definition: definition_vi,
-        from_dictionary: false,
     })
 }
 
@@ -260,15 +271,20 @@ fn syllables(text: &str) -> HashSet<String> {
         .collect()
 }
 
-/// A sense reads "bờ; dải (dải đất dọc theo hai bên bờ sông)": the meanings,
-/// then an explanation in parentheses. The popup shows only the meanings.
-/// A sense that is all explanation keeps it.
-fn headline(sense: &str) -> String {
-    let trimmed = match sense.find(" (") {
-        Some(index) if index > 0 => &sense[..index],
-        _ => sense,
-    };
-    trimmed.trim().to_string()
+/// Splits a sense into its meanings and the explanation in parentheses after
+/// them. A sense that opens with parentheses, such as a usage label
+/// ("(đánh bài) vốn của nhà cái"), is all headline.
+fn split_sense(sense: &str) -> DictionaryMeaning {
+    match sense.find(" (") {
+        Some(index) if index > 0 => DictionaryMeaning {
+            headline: sense[..index].trim().to_string(),
+            explanation: sense[index..].trim().to_string(),
+        },
+        _ => DictionaryMeaning {
+            headline: sense.trim().to_string(),
+            explanation: String::new(),
+        },
+    }
 }
 
 fn normalize(text: &str) -> String {
@@ -329,25 +345,31 @@ mod tests {
     fn picks_the_sense_that_matches_the_definition() {
         let senses = senses_for(&groups(), "noun");
         let river = pick_sense(&senses, "vùng đất dọc theo bờ sông hoặc hồ").unwrap();
-        assert_eq!(headline(river), "bờ; dải");
+        assert_eq!(split_sense(river).headline, "bờ; dải");
 
         // No overlap, or a single shared syllable: the first, most common sense.
         let unrelated = pick_sense(&senses, "một điều hoàn toàn khác").unwrap();
-        assert_eq!(headline(unrelated), "quỹ; tiền gửi");
+        assert_eq!(split_sense(unrelated).headline, "quỹ; tiền gửi");
         let weak = pick_sense(&senses, "chạy dọc con đường").unwrap();
-        assert_eq!(headline(weak), "quỹ; tiền gửi");
+        assert_eq!(split_sense(weak).headline, "quỹ; tiền gửi");
         assert!(pick_sense(&[], "bất kỳ").is_none());
     }
 
     #[test]
-    fn headline_drops_the_explanation() {
+    fn splits_the_explanation_from_the_meanings() {
         assert_eq!(
-            headline("khả năng cầu may (khả năng tình cờ)"),
-            "khả năng cầu may"
+            split_sense("khả năng cầu may (khả năng tình cờ)"),
+            DictionaryMeaning {
+                headline: "khả năng cầu may".into(),
+                explanation: "(khả năng tình cờ)".into(),
+            }
         );
         assert_eq!(
-            headline("(đánh bài) vốn của nhà cái"),
-            "(đánh bài) vốn của nhà cái"
+            split_sense("(đánh bài) vốn của nhà cái"),
+            DictionaryMeaning {
+                headline: "(đánh bài) vốn của nhà cái".into(),
+                explanation: String::new(),
+            }
         );
     }
 }
@@ -378,7 +400,7 @@ mod live_tests {
         for (word, part_of_speech, definition_vi) in cases {
             let senses = lac_viet_senses(word, part_of_speech);
             assert!(!senses.is_empty(), "no Lạc Việt senses for {word}");
-            let picked = pick_sense(&senses, definition_vi).map(|sense| headline(sense));
+            let picked = pick_sense(&senses, definition_vi).map(|sense| split_sense(sense));
             println!(
                 "{word} ({part_of_speech}), {} senses: {picked:?}",
                 senses.len()
