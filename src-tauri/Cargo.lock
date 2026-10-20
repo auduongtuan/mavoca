@@ -2138,6 +2138,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2532096657941c2fea9c289d370a250971c689d4f143798ff67113ec042024a5"
 
 [[package]]
+name = "mavoca"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "objc2 0.6.2",
+ "objc2-app-kit 0.3.1",
+ "objc2-quartz-core 0.3.1",
+ "reqwest",
+ "rusqlite",
+ "scraper",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-opener",
+ "translation-rs",
+ "urlencoding",
+ "window-vibrancy 0.5.3",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4010,29 +4033,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy 0.6.0",
  "windows",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.1.0"
-dependencies = [
- "cc",
- "objc2 0.6.2",
- "objc2-app-kit 0.3.1",
- "objc2-quartz-core 0.3.1",
- "reqwest",
- "rusqlite",
- "scraper",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-opener",
- "translation-rs",
- "urlencoding",
- "window-vibrancy 0.5.3",
 ]
 
 [[package]]

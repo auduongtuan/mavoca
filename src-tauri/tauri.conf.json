@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Vocab Learning",
+  "productName": "Mavoca",
   "version": "0.1.0",
   "identifier": "com.vocablearning.app",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Vocab Learning",
+        "title": "Mavoca",
         "width": 320,
         "height": 440,
         "resizable": false,

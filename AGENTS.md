@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a macOS menu bar vocabulary app built with Tauri v2, React 19,
+Mavoca is a macOS menu bar vocabulary app built with Tauri v2, React 19,
 TypeScript, Vite, Rust, SQLite, and Bun.
 
 The app has four Tauri windows:
@@ -81,7 +81,9 @@ and `src-tauri/tauri.conf.json`.
 ## Data Model
 
 SQLite is the runtime source of truth. The database file is created in Tauri's
-app data directory as `vocab.sqlite3`.
+app data directory as `vocab.sqlite3`. That directory is named after the bundle
+`identifier`, which is still `com.vocablearning.app` from before the app was
+renamed Mavoca. Changing it would start every install on an empty database.
 
 A word holds multiple meanings in a three-level tree modelled on Cambridge:
 part-of-speech entries, guide-word sense groups, and definitions with examples.
@@ -166,8 +168,8 @@ key is `backup_path`.
 - If `backup_path` is empty, backup is disabled.
 - `~/...` paths are expanded in Rust.
 - Folder paths are accepted and normalized to `folder/vocab.sqlite3`.
-- On first launch, the default is `~/Dropbox/Vocab Learning/vocab.sqlite3` only
-  when `~/Dropbox` exists.
+- On first launch, the default is `~/Dropbox/Mavoca/vocab.sqlite3` only when
+  `~/Dropbox` exists.
 - Backup is written using `VACUUM main INTO` to a temporary SQLite file, then
   atomically renamed into place.
 - Backup sync runs after vocabulary changes and after saving settings.

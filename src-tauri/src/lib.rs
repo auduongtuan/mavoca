@@ -413,7 +413,7 @@ fn default_backup_path() -> Option<PathBuf> {
         return None;
     }
 
-    Some(dropbox_dir.join("Vocab Learning").join("vocab.sqlite3"))
+    Some(dropbox_dir.join("Mavoca").join("vocab.sqlite3"))
 }
 
 fn expand_backup_path(value: &str) -> Option<PathBuf> {

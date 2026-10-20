@@ -1,4 +1,4 @@
-# Vocab Learning - macOS Menu Bar App
+# Mavoca - macOS Menu Bar App
 
 A beautiful macOS menu bar application for learning vocabulary words, built with Tauri and React.
 
@@ -47,7 +47,7 @@ bun run tauri build
 ## Project Structure
 
 ```
-vocab-learning-app/
+mavoca/
 ├── src/                    # React frontend
 │   ├── components/         # React components
 │   ├── hooks/             # Custom React hooks
