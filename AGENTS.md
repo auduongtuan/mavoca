@@ -40,8 +40,11 @@ and `src-tauri/tauri.conf.json`.
 - `src/hooks/useVocab.ts` loads the current popup card through Tauri commands
   and listens for Rust events: `vocab-changed`, `vocab-list-changed`, and
   `vocab-empty`. Rotation is driven by commands, not by index math in React.
-- `src/components/VocabCard.tsx` renders the compact menu bar popup card, which
-  shows one definition at a time.
+- `src/components/VocabCard.tsx` renders the compact menu bar popup card: one
+  definition at a time, the pronunciation of the entry it belongs to, and the
+  word's Lạc Việt meaning. It also holds the session translation cache, so
+  stepping through a word's definitions does not re-ask Rust for a meaning it
+  already has (see Translation).
 - `src/components/VocabManager.tsx` renders the dark/light manager UI and calls
   commands for list, add, refresh, create, update, and delete.
 - `src/components/VocabTreeEditor.tsx` edits the three-level tree: entries,
@@ -358,7 +361,9 @@ English. Nothing is stored.
   card list in `AppState.cards`, and `current_index` indexes into it. Prev/Next
   walk every definition of a word before moving to the next word. The ‹ ›
   buttons beside the popup's `1 of 3` counter wrap within the current word;
-  `useVocab` turns them into `step_vocab_card` deltas.
+  `useVocab` turns them into `step_vocab_card` deltas. They sit on the card's
+  word line, above the part of speech and the transcription, because a step
+  changes those as well as the definition text.
 - `AppState.cards` and `AppState.current_index` are never locked at the same
   time. Keep it that way.
 
@@ -375,6 +380,19 @@ English. Nothing is stored.
 ## UI Conventions
 
 - Keep the popup compact and transparent/vibrancy-friendly.
+- The popup window is 320px wide. Judge a card layout at that width, not in a
+  wide browser window: a row that fits at 1000px wraps in the real popup.
+- The card header changes as one unit. The ‹ `1 of 3` › stepper sits on the
+  word's line, and the part-of-speech badge with the pronunciation row sits
+  under it, because a step replaces all of them: the badge and the
+  transcription belong to the definition on screen, not to the word.
+  `--meta-btn-size` lives on `.vocab-card` rather than `.card-meta`, since the
+  stepper moved out of that row and still has to match the VI toggle.
+- The pronunciation row (`.word-pronunciation`) shows the card's `pronUk` and
+  `pronUs` as accent-labelled chips, each with its own speak button so each is
+  read in its own accent. Equal values collapse to a single chip, and a word
+  with no transcription keeps the speaker on the word line instead: the macOS
+  dictionary carries one transcription, Cambridge carries both.
 - Keep manager and settings visually aligned with the current restrained
   dark/light UI.
 - Primary buttons should use a solid background.
