@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Vocab Learning",
+  "productName": "Mavoca",
   "version": "0.1.0",
   "identifier": "com.vocablearning.app",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Vocab Learning",
+        "title": "Mavoca",
         "width": 320,
         "height": 440,
         "resizable": false,
@@ -26,13 +26,69 @@
         "transparent": true,
         "shadow": true,
         "center": false
+      },
+      {
+        "label": "quick-add",
+        "title": "Add Word",
+        "width": 420,
+        "height": 132,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "transparent": true,
+        "shadow": true,
+        "center": true
+      },
+      {
+        "label": "manager",
+        "title": "Vocabulary Manager",
+        "width": 1000,
+        "height": 720,
+        "minWidth": 680,
+        "minHeight": 500,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "trafficLightPosition": {
+          "x": 18,
+          "y": 18
+        },
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "visible": false,
+        "transparent": true,
+        "shadow": true,
+        "center": true
+      },
+      {
+        "label": "settings",
+        "title": "Settings",
+        "width": 560,
+        "height": 560,
+        "minWidth": 480,
+        "minHeight": 500,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "visible": false,
+        "transparent": false,
+        "shadow": true,
+        "center": true
       }
     ],
     "trayIcon": {
       "id": "main",
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true,
-      "menuOnLeftClick": false
+      "menuOnLeftClick": false,
+      "showMenuOnLeftClick": false
     },
     "security": {
       "csp": null
