@@ -24,6 +24,11 @@ extern "C" {
         html_out: *mut *mut c_char,
     ) -> c_int;
     fn mavoca_dcs_free(html: *mut c_char);
+    fn mavoca_dcs_default_pronunciation(
+        dictionary_id: *const c_char,
+        pronunciation: *const c_char,
+        version: *const c_char,
+    ) -> c_int;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -71,6 +76,28 @@ pub fn lookup_html(dictionary: &str, word: &str) -> Result<Vec<String>, LookupEr
     unsafe { mavoca_dcs_free(html) };
 
     Ok(joined.split(RECORD_SEPARATOR).map(str::to_string).collect())
+}
+
+/// Sets the pronunciation style Dictionary.app shows for `dictionary_id`, but
+/// only when the user has never chosen one. This is a system-wide setting:
+/// Dictionary.app and Look Up show the same style. Returns whether it wrote.
+pub fn default_pronunciation(dictionary_id: &str, pronunciation: &str, version: &str) -> bool {
+    let (Ok(dictionary_id), Ok(pronunciation), Ok(version)) = (
+        CString::new(dictionary_id),
+        CString::new(pronunciation),
+        CString::new(version),
+    ) else {
+        return false;
+    };
+
+    // SAFETY: all three strings are valid and NUL-terminated for the call.
+    unsafe {
+        mavoca_dcs_default_pronunciation(
+            dictionary_id.as_ptr(),
+            pronunciation.as_ptr(),
+            version.as_ptr(),
+        ) == 1
+    }
 }
 
 #[cfg(test)]

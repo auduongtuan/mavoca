@@ -200,8 +200,15 @@ dictionary by name and get each entry as HTML.
   also returns phrases and derivatives.
 - `parse_macos_dictionary` takes the first definition of each numbered sense
   (`.se2`) and drops the "•" subsenses, phrases, and derivatives. Oxford has
-  no guide words and no UK pronunciation; its US pronunciation is Oxford's own
-  respelling (`/baNGk/`), not IPA.
+  no guide words and no UK pronunciation.
+- Which US pronunciation an entry's HTML holds depends on Oxford's setting in
+  Dictionary.app: the default is Oxford's own respelling (`/baNGk/`), and "US
+  English (IPA)" gives IPA. The setting lives in the `DCSDictionaryPrefs` key of
+  the `com.apple.DictionaryServices` domain, keyed by `com.apple.dictionary.NOAD`.
+  At launch `prefer_ipa_pronunciation` switches it to IPA, but only when the user
+  has never chosen a style. It is system-wide, so Dictionary.app and Look Up
+  change with it. A user who picks the respelling keeps it, and new words then
+  get respellings again.
 - The parser test uses invented text in Oxford's markup. Keep real dictionary
   content out of the repo. To inspect live markup:
   `cd src-tauri && MAVOCA_WORD=run cargo test dump_macos_entries -- --ignored --nocapture`

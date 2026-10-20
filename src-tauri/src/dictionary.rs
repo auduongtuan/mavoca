@@ -20,6 +20,16 @@ const MAX_DEFINITIONS_PER_WORD: usize = 12;
 /// every Mac, so nothing needs downloading; the British Oxford Dictionary of
 /// English is optional in Dictionary.app and often missing.
 const MACOS_DICTIONARY_NAME: &str = "New Oxford American Dictionary";
+/// Its bundle identifier, which keys its settings in Dictionary.app.
+#[cfg(target_os = "macos")]
+const MACOS_DICTIONARY_ID: &str = "com.apple.dictionary.NOAD";
+/// Oxford's "US English (IPA)" pronunciation setting. The default, "0", shows
+/// Oxford's own respelling (/baNGk/) and leaves IPA out of the entry HTML.
+#[cfg(target_os = "macos")]
+const MACOS_DICTIONARY_IPA_PRONUNCIATION: &str = "1";
+/// The settings format version Oxford declares in `DCSDictionaryDefaultPrefs`.
+#[cfg(target_os = "macos")]
+const MACOS_DICTIONARY_PREFS_VERSION: &str = "2";
 
 const CAMBRIDGE_URL: &str = "https://dictionary.cambridge.org/us/dictionary/english";
 const DICTIONARY_API_URL: &str = "https://api.dictionaryapi.dev/api/v2/entries/en";
@@ -232,6 +242,18 @@ fn fetch_from_macos_dictionary(word: &str) -> Result<Vec<VocabEntry>, String> {
 #[cfg(not(target_os = "macos"))]
 fn fetch_from_macos_dictionary(_word: &str) -> Result<Vec<VocabEntry>, String> {
     Err("the macOS dictionary is only available on macOS".into())
+}
+
+/// Switches Oxford to IPA pronunciations unless the user has picked a style in
+/// Dictionary.app, whose choice is kept. Run before the first lookup. Returns
+/// whether the setting was changed.
+#[cfg(target_os = "macos")]
+pub fn prefer_ipa_pronunciation() -> bool {
+    crate::macos_dictionary::default_pronunciation(
+        MACOS_DICTIONARY_ID,
+        MACOS_DICTIONARY_IPA_PRONUNCIATION,
+        MACOS_DICTIONARY_PREFS_VERSION,
+    )
 }
 
 /// Parses Oxford entries as Dictionary.app renders them, one HTML document per

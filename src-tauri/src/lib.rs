@@ -1603,6 +1603,11 @@ pub fn run() {
         .setup(move |app| {
             setup_system_tray(app.handle())?;
 
+            #[cfg(target_os = "macos")]
+            if dictionary::prefer_ipa_pronunciation() {
+                eprintln!("Switched the Oxford dictionary to IPA pronunciations");
+            }
+
             let conn = init_database(app.handle())?;
             let initial_vocab = list_vocab_from_db(&conn)?;
             let initial_cards = build_cards(&initial_vocab);

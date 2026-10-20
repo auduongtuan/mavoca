@@ -161,3 +161,64 @@ int mavoca_dcs_lookup(const char *dictionary_name, const char *word,
 }
 
 void mavoca_dcs_free(char *html) { free(html); }
+
+// Dictionary.app keeps each dictionary's display settings in this domain, as a
+// dictionary keyed by bundle identifier. The entry XSL reads them, and the
+// lookup above returns the transformed HTML, so they decide which of an
+// entry's pronunciations the HTML keeps.
+#define PREFERENCES_DOMAIN CFSTR("com.apple.DictionaryServices")
+#define DICTIONARY_PREFS_KEY CFSTR("DCSDictionaryPrefs")
+
+int mavoca_dcs_default_pronunciation(const char *dictionary_id,
+                                     const char *pronunciation,
+                                     const char *version) {
+  CFStringRef id =
+      CFStringCreateWithCString(NULL, dictionary_id, kCFStringEncodingUTF8);
+  CFStringRef pronunciation_value =
+      CFStringCreateWithCString(NULL, pronunciation, kCFStringEncodingUTF8);
+  CFStringRef version_value =
+      CFStringCreateWithCString(NULL, version, kCFStringEncodingUTF8);
+  CFPropertyListRef existing =
+      CFPreferencesCopyAppValue(DICTIONARY_PREFS_KEY, PREFERENCES_DOMAIN);
+  int wrote = 0;
+
+  if (id && pronunciation_value && version_value &&
+      (!existing || CFGetTypeID(existing) == CFDictionaryGetTypeID()) &&
+      !(existing && CFDictionaryContainsKey(existing, id))) {
+    CFMutableDictionaryRef all =
+        existing ? CFDictionaryCreateMutableCopy(NULL, 0, existing)
+                 : CFDictionaryCreateMutable(NULL, 0,
+                                             &kCFTypeDictionaryKeyCallBacks,
+                                             &kCFTypeDictionaryValueCallBacks);
+    CFMutableDictionaryRef entry = CFDictionaryCreateMutable(
+        NULL, 0, &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+    if (all && entry) {
+      CFDictionarySetValue(entry, CFSTR("pronunciation"), pronunciation_value);
+      CFDictionarySetValue(entry, CFSTR("version"), version_value);
+      CFDictionarySetValue(all, id, entry);
+      CFPreferencesSetAppValue(DICTIONARY_PREFS_KEY, all, PREFERENCES_DOMAIN);
+      wrote = CFPreferencesAppSynchronize(PREFERENCES_DOMAIN) ? 1 : 0;
+    }
+    if (entry) {
+      CFRelease(entry);
+    }
+    if (all) {
+      CFRelease(all);
+    }
+  }
+
+  if (existing) {
+    CFRelease(existing);
+  }
+  if (version_value) {
+    CFRelease(version_value);
+  }
+  if (pronunciation_value) {
+    CFRelease(pronunciation_value);
+  }
+  if (id) {
+    CFRelease(id);
+  }
+  return wrote;
+}

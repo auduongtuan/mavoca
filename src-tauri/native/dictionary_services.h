@@ -15,4 +15,11 @@ int mavoca_dcs_lookup(const char *dictionary_name, const char *word,
 
 void mavoca_dcs_free(char *html);
 
+// Sets the pronunciation style of the dictionary whose bundle identifier is
+// `dictionary_id`, unless the user has already chosen one in Dictionary.app.
+// Returns 1 when it wrote the preference, 0 when one was already there.
+int mavoca_dcs_default_pronunciation(const char *dictionary_id,
+                                     const char *pronunciation,
+                                     const char *version);
+
 #endif
