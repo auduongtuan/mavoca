@@ -839,6 +839,136 @@ fn update_tray_title(app: &tauri::AppHandle, word: &str) {
     }
 }
 
+/// Keeps the menu bar item highlighted while the popup is open, the way macOS
+/// highlights an item while its own menu or popover is open.
+///
+/// Since macOS 26 the menu bar draws that highlight itself, and only for a
+/// status item that is presenting content: `NSStatusBarButton.highlight` sets
+/// the button's state but nothing is drawn. `NSPopover` marks the presentation
+/// with the private `_willPresentContent:cancellationHandler:` and ends it with
+/// `_didPresentContent:`; the popup is a plain window, so it makes the same two
+/// calls. Both are checked with `respondsToSelector:` first, so a macOS that
+/// drops them only loses the highlight.
+fn set_tray_highlighted(app: &tauri::AppHandle, highlighted: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(mtm) = objc2::MainThreadMarker::new() else {
+                return;
+            };
+            let Some(status_item) = find_status_item(mtm) else {
+                return;
+            };
+            if highlighted {
+                begin_tray_presentation(&handle, &status_item);
+            } else {
+                end_tray_presentation(&status_item);
+            }
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, highlighted);
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    /// The object the status item is presenting while the popup is open. The
+    /// same object has to be handed back to end the presentation. Only touched
+    /// on the main thread.
+    static TRAY_PRESENTATION: std::cell::RefCell<Option<objc2::rc::Retained<objc2::runtime::NSObject>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+fn responds_to(object: &objc2::runtime::AnyObject, selector: objc2::runtime::Sel) -> bool {
+    unsafe { objc2::msg_send![object, respondsToSelector: selector] }
+}
+
+/// Tauri 2.7 has no handle to the `NSStatusItem` (`with_inner_tray_icon`
+/// arrives in 2.10), so it is reached through its button, which sits in one of
+/// the app's status bar windows. The app has a single tray item.
+#[cfg(target_os = "macos")]
+fn find_status_item(
+    mtm: objc2::MainThreadMarker,
+) -> Option<objc2::rc::Retained<objc2::runtime::AnyObject>> {
+    fn find_button(
+        view: &objc2_app_kit::NSView,
+    ) -> Option<objc2::rc::Retained<objc2_app_kit::NSView>> {
+        if view
+            .downcast_ref::<objc2_app_kit::NSStatusBarButton>()
+            .is_some()
+        {
+            return Some(objc2::Message::retain(view));
+        }
+        // objc2 has not audited this binding, so it is marked unsafe; reading
+        // a view's subviews on the main thread has no other requirement.
+        unsafe { view.subviews() }
+            .iter()
+            .find_map(|subview| find_button(&subview))
+    }
+
+    let button = objc2_app_kit::NSApplication::sharedApplication(mtm)
+        .windows()
+        .iter()
+        .filter_map(|window| window.contentView())
+        .find_map(|view| find_button(&view))?;
+
+    let selector = objc2::sel!(_statusItem);
+    if !responds_to(&button, selector) {
+        return None;
+    }
+    unsafe { objc2::msg_send![&*button, _statusItem] }
+}
+
+#[cfg(target_os = "macos")]
+fn begin_tray_presentation(app: &tauri::AppHandle, status_item: &objc2::runtime::AnyObject) {
+    let will_present = objc2::sel!(_willPresentContent:cancellationHandler:);
+    let did_present = objc2::sel!(_didPresentContent:);
+    if TRAY_PRESENTATION.with_borrow(Option::is_some)
+        || !responds_to(status_item, will_present)
+        || !responds_to(status_item, did_present)
+    {
+        return;
+    }
+
+    let token = objc2::runtime::NSObject::new();
+    // The menu bar calls this when it takes the highlight away, for example
+    // when another menu opens; the popup closes with it, as a popover would.
+    let app = app.clone();
+    let on_cancel = block2::RcBlock::new(move || hide_popup(&app));
+    unsafe {
+        let _: () = objc2::msg_send![
+            status_item,
+            _willPresentContent: &*token,
+            cancellationHandler: &*on_cancel
+        ];
+    }
+    TRAY_PRESENTATION.set(Some(token));
+}
+
+#[cfg(target_os = "macos")]
+fn end_tray_presentation(status_item: &objc2::runtime::AnyObject) {
+    let Some(token) = TRAY_PRESENTATION.take() else {
+        return;
+    };
+    unsafe {
+        let _: () = objc2::msg_send![status_item, _didPresentContent: &*token];
+    }
+}
+
+/// Hides the popup and clears the menu bar highlight.
+fn hide_popup(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.is_window_visible.lock().unwrap() = false;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    set_tray_highlighted(app, false);
+}
+
 #[tauri::command]
 fn list_vocab_words(state: tauri::State<AppState>) -> Result<Vec<VocabWord>, String> {
     refresh_vocab_cache(&state)
@@ -1210,6 +1340,7 @@ fn show_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
         let _ = position_popup_window(&window);
         let _ = window.show();
         let _ = window.set_focus();
+        set_tray_highlighted(&app, true);
     }
 }
 
@@ -1277,11 +1408,8 @@ fn hide_quick_add_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn hide_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
-    *state.is_window_visible.lock().unwrap() = false;
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
+fn hide_main_window(app: tauri::AppHandle) {
+    hide_popup(&app);
 }
 
 /// Fits the popup to its card. The frontend reports the card's natural height
@@ -1541,6 +1669,7 @@ pub fn run() {
                     if let tauri::WindowEvent::Focused(false) = event {
                         *state_clone.is_window_visible.lock().unwrap() = false;
                         let _ = window_clone.hide();
+                        set_tray_highlighted(window_clone.app_handle(), false);
                     }
                 });
             }
@@ -1639,6 +1768,7 @@ pub fn run() {
                             let _ = position_popup_at_click(&window, position.x, position.y);
                             let _ = window.show().and_then(|_| window.set_focus());
                         }
+                        set_tray_highlighted(app, !is_visible);
                     }
                 }
                 tauri::tray::MouseButton::Right => {

@@ -310,6 +310,16 @@ English. Nothing is stored.
   the popup never toggles, whatever the flags above say. `build_tray_menu`
   builds it and the right-click branch of `on_tray_icon_event` shows it with
   `popup_menu`. Do not reattach it.
+- The menu bar item stays highlighted while the popup is open, like an item
+  showing its own menu or popover. Since macOS 26 the menu bar draws that
+  highlight itself, and `NSStatusBarButton.highlight` changes nothing on
+  screen. `set_tray_highlighted` makes the private calls `NSPopover` makes,
+  `_willPresentContent:cancellationHandler:` and `_didPresentContent:` with
+  the same token object, checking `respondsToSelector:` first. The handler
+  must be a real block; with nil nothing is drawn. Tauri 2.7 has no handle to
+  the `NSStatusItem` (`with_inner_tray_icon` arrives in 2.10), so it is
+  reached through the `NSStatusBarButton` in the app's status bar window. Every
+  path that shows or hides the popup must call `set_tray_highlighted`.
 - The main popup is hidden on startup and hidden again when it loses focus.
 - Popup positioning is handled in Rust and uses the click position when opened
   from the tray.
