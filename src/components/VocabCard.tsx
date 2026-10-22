@@ -11,7 +11,7 @@ import {
   SpeakerHigh,
   Translate,
 } from '@phosphor-icons/react';
-import { CardTranslation, VocabCardData } from '../types';
+import { LacVietMeaning, VocabCardData } from '../types';
 import { usePopupAutoResize } from '../hooks/usePopupAutoResize';
 
 const UK_VOICE_LANG = 'en-GB';
@@ -86,15 +86,19 @@ const pronunciationsOf = (card: VocabCardData): Pronunciation[] => {
 };
 
 /**
- * Keeps the Vietnamese of the definitions stepped through in this session.
- * Stepping remounts the card, and without it the meaning would blank out while
- * Rust answered again; that happens on every definition of a word.
+ * Definitions translated in this session, keyed by the English text: stepping
+ * remounts the card, and without it the VI panel would empty until Rust
+ * answered again. Keyed on text rather than the row id, because SQLite reuses
+ * the id of a deleted and re-inserted definition.
  */
-const translationCache = new Map<string, CardTranslation>();
+const translationCache = new Map<string, string>();
 const MAX_CACHED_TRANSLATIONS = 200;
 
 const translationKey = (card: VocabCardData) =>
   `${card.word}\u0000${card.partOfSpeech}\u0000${card.definition}`;
+
+/** Senses shown before the section has to be expanded. */
+const SENSES_SHOWN = 3;
 
 interface VocabCardProps {
   card: VocabCardData;
@@ -119,20 +123,45 @@ export const VocabCard: React.FC<VocabCardProps> = ({
   const cardKey = translationKey(card);
   const cardRef = useRef<HTMLDivElement>(null);
   usePopupAutoResize(cardRef);
-  // The parent keys this component by card, so a new card starts untranslated —
-  // unless this session already translated that definition.
-  const [translation, setTranslation] = useState<CardTranslation | null>(
-    () => translationCache.get(cardKey) ?? null,
+
+  // Lạc Việt's entry for this card. It is a local lookup, so it shows as soon
+  // as the card does; `undefined` until it arrives, `null` when Lạc Việt has no
+  // entry for the word.
+  const [lacViet, setLacViet] = useState<LacVietMeaning | null | undefined>(undefined);
+  const [showAllSenses, setShowAllSenses] = useState(false);
+
+  // Behind the VI button: the definition translated, and the word itself when
+  // Lạc Việt has no entry to show instead.
+  const [definitionVi, setDefinitionVi] = useState<string>(
+    () => translationCache.get(cardKey) ?? '',
   );
+  const [wordVi, setWordVi] = useState('');
   const [showTranslation, setShowTranslation] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [translateError, setTranslateError] = useState<string | null>(null);
   const requestedTranslation = useRef(false);
 
-  // One call gives both the Lạc Việt meaning, shown on the card by default,
-  // and the translated definition behind VI. Picking the Lạc Việt sense needs
-  // the translated definition, which takes about a second, longer after the
-  // translator's model was unloaded; Rust caches the result too.
+  // Fetch the entry on its own, so the Vietnamese section never waits on the
+  // translator. The definition on screen is only a hint about which sense is
+  // closest: Rust uses the translation already stored with the row, if any, and
+  // leaves Lạc Việt's own order alone otherwise.
+  const loadLacViet = useCallback(async () => {
+    try {
+      const result = await invoke<LacVietMeaning | null>('lac_viet_meaning', {
+        word: card.word,
+        partOfSpeech: card.partOfSpeech,
+        definitionId: card.definitionId,
+      });
+      setLacViet(result);
+    } catch {
+      // A Mac without the dictionary leaves the section out; the English card
+      // is unaffected, so there is nothing to report.
+      setLacViet(null);
+    }
+  }, [card.word, card.partOfSpeech, card.definitionId]);
+
+  // Eager, so the translation is stored with the definition and the VI button
+  // is instant afterwards. Takes about a second the first time.
   const loadTranslation = useCallback(async () => {
     if (requestedTranslation.current) {
       return;
@@ -141,30 +170,50 @@ export const VocabCard: React.FC<VocabCardProps> = ({
 
     const cached = translationCache.get(cardKey);
     if (cached) {
-      setTranslation(cached);
+      setDefinitionVi(cached);
       return;
     }
 
     setTranslating(true);
     setTranslateError(null);
     try {
-      const result = await invoke<CardTranslation>('translate_card', {
-        word: card.word,
-        partOfSpeech: card.partOfSpeech,
+      const result = await invoke<string>('translate_definition', {
         definition: card.definition,
+        definitionId: card.definitionId,
       });
-      setTranslation(result);
-      if (translationCache.size >= MAX_CACHED_TRANSLATIONS) {
-        translationCache.clear();
+      setDefinitionVi(result);
+      if (result) {
+        if (translationCache.size >= MAX_CACHED_TRANSLATIONS) {
+          translationCache.clear();
+        }
+        translationCache.set(cardKey, result);
+        // Rust stored it with the row, so asking again now ranks the senses
+        // against it. The first sight of a definition shows Lạc Việt's own
+        // order, which is the honest fallback while there is nothing to
+        // compare against.
+        void loadLacViet();
       }
-      translationCache.set(cardKey, result);
     } catch (err) {
       requestedTranslation.current = false;
       setTranslateError(err instanceof Error ? err.message : String(err));
     } finally {
       setTranslating(false);
     }
-  }, [cardKey, card.word, card.partOfSpeech, card.definition]);
+  }, [cardKey, card.definition, card.definitionId, loadLacViet]);
+
+  // Takes the word through the translator, for the case where Lạc Việt has no
+  // entry and the VI button is all there is to show.
+  const loadWordTranslation = useCallback(async () => {
+    setTranslating(true);
+    setTranslateError(null);
+    try {
+      setWordVi(await invoke<string>('translate_word', { word: card.word }));
+    } catch (err) {
+      setTranslateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTranslating(false);
+    }
+  }, [card.word]);
 
   // Load while the popup is open; the hidden rotation every few seconds
   // mounts cards nobody sees, and those are skipped.
@@ -172,26 +221,35 @@ export const VocabCard: React.FC<VocabCardProps> = ({
     const appWindow = getCurrentWindow();
     appWindow.isVisible().then((visible) => {
       if (visible) {
+        void loadLacViet();
         void loadTranslation();
       }
     }).catch(() => {});
     const unlisten = appWindow.onFocusChanged(({ payload: focused }) => {
       if (focused) {
+        void loadLacViet();
         void loadTranslation();
       }
     });
     return () => {
       unlisten.then((stop) => stop());
     };
-  }, [loadTranslation]);
+  }, [loadLacViet, loadTranslation]);
 
   const toggleTranslation = () => {
-    setShowTranslation((shown) => !shown);
+    const shown = !showTranslation;
+    setShowTranslation(shown);
     void loadTranslation();
+    // Nothing from Lạc Việt to show: the word itself is the only Vietnamese
+    // there is, and it costs a second translation, so only on request.
+    if (shown && lacViet === null && !wordVi) {
+      void loadWordTranslation();
+    }
   };
 
-  const meaning = translation?.meaning;
-  const visibleTranslation = showTranslation ? translation : null;
+  const senses = lacViet?.senses ?? [];
+  const visibleSenses = showAllSenses ? senses : senses.slice(0, SENSES_SHOWN);
+  const hiddenSenses = senses.length - SENSES_SHOWN;
 
   return (
     <div className="vocab-card" ref={cardRef}>
@@ -287,34 +345,70 @@ export const VocabCard: React.FC<VocabCardProps> = ({
       </div>
 
       <div className="meaning">
-        <p>{card.definition}</p>
-        {/* Under the definition rather than in the header, so the header and
-            its divider never move when the Vietnamese appears. */}
-        {meaning && (
-          <p className="dictionary-meaning" title="Từ điển Lạc Việt">
-            <strong>{meaning.headline}</strong>
-            {meaning.explanation && ` ${meaning.explanation}`}
-          </p>
-        )}
-        {visibleTranslation?.word && (
-          <p className="translation word-translation" title="Machine translation">
-            {visibleTranslation.word}
-          </p>
-        )}
-        {visibleTranslation?.definition && (
-          <p className="translation">{visibleTranslation.definition}</p>
-        )}
-        {showTranslation && translating && (
-          <p className="translation-status">Translating…</p>
-        )}
-        {showTranslation && translateError && (
-          <p className="translation-status error">{translateError}</p>
+        {/* Two sections rather than one block: the definition follows the
+            stepper, the Vietnamese entry does not. Lạc Việt numbers its senses
+            its own way and merges homographs under one part of speech, so a
+            sense belongs to the word's entry, not to the definition on screen. */}
+        <section className="card-section">
+          <h2 className="section-label">English</h2>
+          <p>{card.definition}</p>
+          {showTranslation && definitionVi && (
+            <p className="translation">{definitionVi}</p>
+          )}
+          {showTranslation && translating && (
+            <p className="translation-status">Translating…</p>
+          )}
+          {showTranslation && translateError && (
+            <p className="translation-status error">{translateError}</p>
+          )}
+        </section>
+
+        {senses.length > 0 ? (
+          <section className="card-section dictionary-section">
+            <h2 className="section-label">
+              Tiếng Việt
+              <span className="dictionary-source">
+                Lạc Việt{lacViet?.partOfSpeechLabel ? ` · ${lacViet.partOfSpeechLabel}` : ''}
+              </span>
+            </h2>
+            <ul className="sense-list">
+              {visibleSenses.map((sense, index) => (
+                <li
+                  className={index === 0 && lacViet?.ranked ? 'sense closest' : 'sense'}
+                  key={`${index}-${sense.headline}`}
+                >
+                  <strong>{sense.headline}</strong>
+                  {sense.explanation && ` ${sense.explanation}`}
+                </li>
+              ))}
+            </ul>
+            {hiddenSenses > 0 && (
+              <button
+                className="sense-toggle"
+                onClick={() => setShowAllSenses((shown) => !shown)}
+                aria-expanded={showAllSenses}
+              >
+                {showAllSenses ? 'Show fewer' : `+${hiddenSenses} more`}
+              </button>
+            )}
+          </section>
+        ) : (
+          showTranslation &&
+          wordVi && (
+            <section className="card-section dictionary-section">
+              <h2 className="section-label">
+                Tiếng Việt
+                <span className="dictionary-source">máy dịch</span>
+              </h2>
+              <p className="word-translation">{wordVi}</p>
+            </section>
+          )
         )}
       </div>
 
       {card.examples.length > 0 && (
         <div className="example">
-          <h3>Example:</h3>
+          <h2 className="section-label">Example</h2>
           {card.examples.map((example, index) => (
             <p className="example-text" key={index}>"{example}"</p>
           ))}

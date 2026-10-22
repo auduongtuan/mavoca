@@ -304,18 +304,6 @@ html, body {
 }
 
 /* Lạc Việt's meaning, shown on every card that has one. */
-.vocab-card .dictionary-meaning {
-  margin-top: 4px;
-  color: rgba(55, 53, 47, 0.72);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.vocab-card .dictionary-meaning strong {
-  color: #37352f;
-  font-weight: 600;
-}
-
 .vocab-card .word-translation {
   font-weight: 600;
 }
@@ -331,6 +319,9 @@ html, body {
 }
 
 .meaning {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   padding: 0;
 }
 
@@ -340,18 +331,100 @@ html, body {
   color: #37352f;
 }
 
-.example {
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  padding-top: 12px;
+/* The English definition and the Vietnamese entry are separate sections: a step
+   replaces the first and leaves the second alone. */
+.card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.example h3 {
+.section-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   font-size: 10px;
   font-weight: 600;
   color: #787774;
-  margin-bottom: 6px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* Which entry the senses came from. Not uppercased: it is Vietnamese, and the
+   part of speech is shown as the dictionary writes it. */
+.dictionary-source {
+  color: rgba(55, 53, 47, 0.45);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.card-section.dictionary-section {
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  padding-top: 10px;
+}
+
+.sense-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sense {
+  position: relative;
+  padding-left: 11px;
+  color: rgba(55, 53, 47, 0.72);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sense::before {
+  content: '';
+  position: absolute;
+  top: 0.62em;
+  left: 1px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.sense strong {
+  color: #37352f;
+  font-weight: 600;
+}
+
+/* The sense the translated definition points at. Only marked when the ranking
+   ran, never presented as a match: Lạc Việt's senses do not line up with the
+   English ones, so the rest stay visible and equally readable. */
+.sense.closest::before {
+  background: #37352f;
+  opacity: 1;
+}
+
+.sense-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: rgba(55, 53, 47, 0.5);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sense-toggle:hover {
+  color: #37352f;
+}
+
+.example {
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  padding-top: 12px;
 }
 
 .example-text {
@@ -1282,10 +1355,6 @@ html, body {
     border-top-color: rgba(255, 255, 255, 0.08);
   }
 
-  .example h3 {
-    color: #9b9a97;
-  }
-
   .word-pronunciation {
     color: #9b9a97;
   }
@@ -1582,12 +1651,34 @@ html, body {
   }
 
   .vocab-card .translation,
-  .vocab-card .dictionary-meaning {
+  .vocab-card .sense {
     color: rgba(227, 226, 224, 0.72);
   }
 
-  .vocab-card .dictionary-meaning strong {
+  .vocab-card .sense strong {
     color: #e3e2e0;
+  }
+
+  .vocab-card .sense.closest::before {
+    background: #e3e2e0;
+  }
+
+  .vocab-card .section-label {
+    color: rgba(227, 226, 224, 0.5);
+  }
+
+  .vocab-card .dictionary-source,
+  .vocab-card .sense-toggle {
+    color: rgba(227, 226, 224, 0.4);
+  }
+
+  .vocab-card .sense-toggle:hover {
+    color: #e3e2e0;
+  }
+
+  .vocab-card .card-section.dictionary-section,
+  .vocab-card .example {
+    border-top-color: rgba(255, 255, 255, 0.08);
   }
 
   .vocab-card .translation-status {

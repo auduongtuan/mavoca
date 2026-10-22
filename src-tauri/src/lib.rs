@@ -204,6 +204,7 @@ fn create_schema(conn: &Connection) -> Result<(), String> {
             pron_us TEXT NOT NULL DEFAULT '',
             guide_word TEXT NOT NULL DEFAULT '',
             definition TEXT NOT NULL,
+            definition_vi TEXT NOT NULL DEFAULT '',
             examples TEXT NOT NULL DEFAULT '[]',
             sort_order INTEGER NOT NULL
         );
@@ -217,7 +218,31 @@ fn create_schema(conn: &Connection) -> Result<(), String> {
         );
         "#,
     )
-    .map_err(|err| format!("Failed to initialize database: {err}"))
+    .map_err(|err| format!("Failed to initialize database: {err}"))?;
+
+    ensure_definition_vi_column(conn)
+}
+
+/// `definition_vi` arrived after the first databases were created, and SQLite
+/// has no `ADD COLUMN IF NOT EXISTS`. It holds the definition translated into
+/// Vietnamese, so a card is translated once instead of on every view; it is a
+/// cache, so an empty value only costs another translation.
+fn ensure_definition_vi_column(conn: &Connection) -> Result<(), String> {
+    if table_columns(conn, "vocab_definitions")?
+        .iter()
+        .any(|column| column == "definition_vi")
+    {
+        return Ok(());
+    }
+
+    conn.execute(
+        "ALTER TABLE vocab_definitions \
+         ADD COLUMN definition_vi TEXT NOT NULL DEFAULT ''",
+        [],
+    )
+    .map_err(|err| format!("Failed to add the Vietnamese definition column: {err}"))?;
+
+    Ok(())
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
@@ -319,7 +344,7 @@ fn migrate_legacy_vocabs(conn: &Connection) -> Result<(), String> {
                 }],
             }];
 
-            insert_definition_rows(conn, row.id, &entries)?;
+            insert_definition_rows(conn, row.id, &entries, &HashMap::new())?;
         }
 
         conn.execute_batch(
@@ -399,7 +424,7 @@ fn seed_if_empty(conn: &Connection) -> Result<(), String> {
             .map_err(|err| format!("Failed to seed vocabulary: {err}"))?;
 
         if inserted > 0 {
-            insert_definition_rows(conn, conn.last_insert_rowid(), &entries)?;
+            insert_definition_rows(conn, conn.last_insert_rowid(), &entries, &HashMap::new())?;
         }
     }
 
@@ -535,15 +560,16 @@ fn insert_definition_rows(
     conn: &Connection,
     vocab_id: i64,
     entries: &[VocabEntry],
+    carried_translations: &HashMap<String, String>,
 ) -> Result<(), String> {
     let mut stmt = conn
         .prepare(
             r#"
             INSERT INTO vocab_definitions (
                 vocab_id, entry_index, part_of_speech, pron_uk, pron_us,
-                guide_word, definition, examples, sort_order
+                guide_word, definition, definition_vi, examples, sort_order
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
         )
         .map_err(|err| format!("Failed to prepare definition insert: {err}"))?;
@@ -551,6 +577,13 @@ fn insert_definition_rows(
     for (sort_order, row) in entries_to_rows(entries).into_iter().enumerate() {
         let examples = serde_json::to_string(&row.examples)
             .map_err(|err| format!("Failed to encode examples: {err}"))?;
+        // A translation belongs to the English text, not to the row: carrying
+        // it over by text keeps it through a manager save or a re-fetch, and
+        // drops it when the definition itself changed.
+        let definition_vi = carried_translations
+            .get(&row.definition)
+            .cloned()
+            .unwrap_or_default();
 
         stmt.execute(params![
             vocab_id,
@@ -560,6 +593,7 @@ fn insert_definition_rows(
             row.pron_us,
             row.guide_word,
             row.definition,
+            definition_vi,
             examples,
             sort_order as i64
         ])
@@ -576,13 +610,71 @@ fn replace_word_definitions(
     vocab_id: i64,
     entries: &[VocabEntry],
 ) -> Result<(), String> {
+    // Read before the delete: the rows are about to be replaced, and their
+    // translations only have to survive when their English text did.
+    let carried_translations = definition_translations_for(conn, vocab_id)?;
+
     conn.execute(
         "DELETE FROM vocab_definitions WHERE vocab_id = ?1",
         params![vocab_id],
     )
     .map_err(|err| format!("Failed to clear existing definitions: {err}"))?;
 
-    insert_definition_rows(conn, vocab_id, entries)
+    insert_definition_rows(conn, vocab_id, entries, &carried_translations)
+}
+
+/// Every stored Vietnamese definition of a word, keyed by its English text.
+fn definition_translations_for(
+    conn: &Connection,
+    vocab_id: i64,
+) -> Result<HashMap<String, String>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT definition, definition_vi
+            FROM vocab_definitions
+            WHERE vocab_id = ?1 AND definition_vi <> ''
+            "#,
+        )
+        .map_err(|err| format!("Failed to prepare translation query: {err}"))?;
+
+    let rows = stmt
+        .query_map(params![vocab_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| format!("Failed to read translations: {err}"))?;
+
+    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(|err| format!("Failed to decode translations: {err}"))
+}
+
+/// The Vietnamese definition already stored for a row, if any.
+fn stored_definition_vi(conn: &Connection, definition_id: i64) -> Result<Option<String>, String> {
+    let stored = conn.query_row(
+        "SELECT definition_vi FROM vocab_definitions WHERE id = ?1",
+        params![definition_id],
+        |row| row.get::<_, String>(0),
+    );
+
+    match stored {
+        Ok(definition_vi) => Ok(Some(definition_vi).filter(|value| !value.is_empty())),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(format!("Failed to read the Vietnamese definition: {err}")),
+    }
+}
+
+fn store_definition_vi(
+    conn: &Connection,
+    definition_id: i64,
+    definition_vi: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE vocab_definitions SET definition_vi = ?1 WHERE id = ?2",
+        params![definition_vi, definition_id],
+    )
+    .map_err(|err| format!("Failed to store the Vietnamese definition: {err}"))?;
+
+    Ok(())
 }
 
 fn definition_row_from_sql(
@@ -1317,20 +1409,83 @@ fn delete_vocab(
     Ok(())
 }
 
+/// Lạc Việt's entry for a card, or `None` when it does not have the word.
+///
+/// The lookup is local and instant, so the popup shows the Vietnamese section
+/// as soon as the card appears. When the definition has already been translated
+/// and stored, that translation orders the senses; otherwise they stay in Lạc
+/// Việt's own order rather than waiting for the translator.
+///
+/// Blocking for the same reason as `translate_definition`: the dictionary
+/// bridge talks to DictionaryServices, which finishes on the main queue.
+#[tauri::command]
+async fn lac_viet_meaning(
+    state: tauri::State<'_, AppState>,
+    word: String,
+    part_of_speech: String,
+    definition_id: Option<i64>,
+) -> Result<Option<vietnamese::LacVietMeaning>, String> {
+    let translated_definition = match definition_id {
+        Some(id) => {
+            let conn = state.db.lock().unwrap();
+            stored_definition_vi(&conn, id)?
+        }
+        None => None,
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        vietnamese::lac_viet_meaning(&word, &part_of_speech, translated_definition.as_deref())
+    })
+    .await
+    .map_err(|err| format!("Dictionary task failed: {err}"))
+}
+
+/// The definition in Vietnamese, stored with the row when it has an id so the
+/// card is never translated twice.
+///
 /// Async so Tauri runs it off the main thread, and the blocking work moves to
 /// a worker: Translation.framework finishes on the main queue, so holding the
 /// main thread here would stall until the bridge times out.
 #[tauri::command]
-async fn translate_card(
-    word: String,
-    part_of_speech: String,
+async fn translate_definition(
+    state: tauri::State<'_, AppState>,
     definition: String,
-) -> Result<vietnamese::CardTranslation, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        vietnamese::translate_card(&word, &part_of_speech, &definition)
-    })
-    .await
-    .map_err(|err| format!("Translation task failed: {err}"))?
+    definition_id: Option<i64>,
+) -> Result<String, String> {
+    if let Some(id) = definition_id {
+        let stored = {
+            let conn = state.db.lock().unwrap();
+            stored_definition_vi(&conn, id)?
+        };
+        if let Some(stored) = stored {
+            return Ok(stored);
+        }
+    }
+
+    let state = state.inner().clone();
+    let translated = {
+        let definition = definition.clone();
+        tauri::async_runtime::spawn_blocking(move || vietnamese::translate_text(&definition))
+            .await
+            .map_err(|err| format!("Translation task failed: {err}"))??
+    };
+
+    if let (Some(id), false) = (definition_id, translated.is_empty()) {
+        let conn = state.db.lock().unwrap();
+        store_definition_vi(&conn, id, &translated)?;
+    }
+
+    Ok(translated)
+}
+
+/// The word itself, for the popup to show under VI when Lạc Việt has no entry
+/// for it. Kept separate from `translate_definition` so a card whose meaning
+/// Lạc Việt does have never pays for a second translation.
+#[tauri::command]
+async fn translate_word(word: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || vietnamese::translate_text(&word))
+        .await
+        .map_err(|err| format!("Translation task failed: {err}"))?
 }
 
 #[tauri::command]
@@ -1595,7 +1750,9 @@ pub fn run() {
             set_launch_at_login,
             add_vocab_word,
             refresh_vocab_word,
-            translate_card,
+            lac_viet_meaning,
+            translate_definition,
+            translate_word,
             create_vocab,
             update_vocab,
             delete_vocab
@@ -1887,6 +2044,148 @@ mod tests {
         migrate_legacy_vocabs(&conn).expect("migration");
 
         assert!(list_vocab_from_db(&conn).expect("read").is_empty());
+    }
+
+    /// The Vietnamese definition is a cache of a translation, so it has to
+    /// survive a save (a manager edit, a re-fetch) as long as its English text
+    /// does, and disappear when the definition itself changed.
+    #[test]
+    fn keeps_stored_translations_through_a_resave() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+
+        let id = save_word_tree(&conn, None, "run", WordSource::Cambridge, &sample_entries())
+            .expect("save");
+        let definition_id = definition_id_for(&conn, id, "to move using your legs");
+        store_definition_vi(&conn, definition_id, "di chuyển bằng chân").expect("store");
+        assert_eq!(
+            stored_definition_vi(&conn, definition_id)
+                .expect("read")
+                .as_deref(),
+            Some("di chuyển bằng chân")
+        );
+
+        // Saving the same tree again replaces every row; the translation of an
+        // unchanged definition comes with it.
+        save_word_tree(
+            &conn,
+            Some(id),
+            "run",
+            WordSource::Cambridge,
+            &sample_entries(),
+        )
+        .expect("resave");
+        let resaved = definition_id_for(&conn, id, "to move using your legs");
+        assert_eq!(
+            stored_definition_vi(&conn, resaved)
+                .expect("read")
+                .as_deref(),
+            Some("di chuyển bằng chân")
+        );
+
+        // Re-wording one definition drops only that one's translation. Which
+        // comes back empty even though SQLite reuses the row ids of the rows it
+        // just deleted, so a stale id can point at a different definition: the
+        // popup therefore keys its own cache on the English text, not the id.
+        let mut reworded = sample_entries();
+        reworded[0].sense_groups[0].definitions[0].definition = "to move quickly on foot".into();
+        save_word_tree(&conn, Some(id), "run", WordSource::Cambridge, &reworded).expect("reword");
+        assert_eq!(
+            stored_definition_vi(
+                &conn,
+                definition_id_for(&conn, id, "to move quickly on foot")
+            )
+            .expect("read"),
+            None
+        );
+        assert_eq!(
+            stored_definition_vi(&conn, definition_id_for(&conn, id, "an act of running"))
+                .expect("read")
+                .as_deref(),
+            None,
+            "the other definitions were never translated"
+        );
+        assert_eq!(
+            stored_definition_vi(
+                &conn,
+                definition_id_for(&conn, id, "to organize or control")
+            )
+            .expect("read")
+            .as_deref(),
+            None
+        );
+    }
+
+    /// The column arrived after the first databases were created, so opening
+    /// one of those has to add it rather than fail on every insert.
+    #[test]
+    fn adds_the_vietnamese_column_to_an_older_database() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE vocab_definitions (
+                id INTEGER PRIMARY KEY,
+                vocab_id INTEGER NOT NULL,
+                entry_index INTEGER NOT NULL,
+                part_of_speech TEXT NOT NULL,
+                pron_uk TEXT NOT NULL DEFAULT '',
+                pron_us TEXT NOT NULL DEFAULT '',
+                guide_word TEXT NOT NULL DEFAULT '',
+                definition TEXT NOT NULL,
+                examples TEXT NOT NULL DEFAULT '[]',
+                sort_order INTEGER NOT NULL
+            );
+            "#,
+        )
+        .expect("old schema");
+        assert!(!table_columns(&conn, "vocab_definitions")
+            .expect("columns")
+            .iter()
+            .any(|column| column == "definition_vi"));
+
+        create_schema(&conn).expect("schema");
+        assert!(table_columns(&conn, "vocab_definitions")
+            .expect("columns")
+            .iter()
+            .any(|column| column == "definition_vi"));
+
+        // Idempotent: the app opens the same database on every launch.
+        create_schema(&conn).expect("schema again");
+    }
+
+    /// Each card carries the row id the popup keys its translation on.
+    #[test]
+    fn cards_carry_their_definition_row() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+        let id = save_word_tree(&conn, None, "run", WordSource::Cambridge, &sample_entries())
+            .expect("save");
+
+        let words = list_vocab_from_db(&conn).expect("read");
+        let cards = build_cards(&words);
+        assert_eq!(cards.len(), 3);
+
+        let rows: Vec<i64> = {
+            let mut stmt = conn
+                .prepare("SELECT id FROM vocab_definitions WHERE vocab_id = ?1 ORDER BY sort_order")
+                .expect("prepare");
+            stmt.query_map(params![id], |row| row.get(0))
+                .expect("query")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("rows")
+        };
+        let card_ids: Vec<i64> = cards.iter().map(|card| card.definition_id).collect();
+        assert_eq!(card_ids, rows);
+        assert!(cards.iter().all(|card| card.definition_id > 0));
+    }
+
+    fn definition_id_for(conn: &Connection, vocab_id: i64, definition: &str) -> i64 {
+        conn.query_row(
+            "SELECT id FROM vocab_definitions WHERE vocab_id = ?1 AND definition = ?2",
+            params![vocab_id, definition],
+            |row| row.get(0),
+        )
+        .expect("definition row")
     }
 
     fn sample_entries() -> Vec<VocabEntry> {

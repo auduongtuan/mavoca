@@ -39,6 +39,8 @@ export interface VocabTreeInput {
 /** One rotation unit: a single definition, flattened with its word. */
 export interface VocabCardData {
   vocabId: number;
+  /** The definition row this card shows, used to store its translation. */
+  definitionId: number;
   word: string;
   source: WordSource;
   partOfSpeech: string;
@@ -59,14 +61,22 @@ export interface AppSettings {
   rotationIntervalSecs: number;
 }
 
-/** The popup's Vietnamese, from the `translate_card` command. */
-export interface CardTranslation {
-  /** Lạc Việt's sense for the card; null when it does not have the word. */
-  meaning: DictionaryMeaning | null;
-  /** The word machine translated; only filled when `meaning` is null. */
-  word: string;
-  /** The definition, translated; empty when the translator is unavailable. */
-  definition: string;
+/**
+ * The popup's Vietnamese section, from the `lac_viet_meaning` command: Lạc
+ * Việt's own entry for the card's part of speech, or null when it does not have
+ * the word.
+ */
+export interface LacVietMeaning {
+  /** The labels the senses came from, such as `danh từ`; may be empty. */
+  partOfSpeechLabel: string;
+  /** Every sense for this part of speech, in display order. */
+  senses: DictionaryMeaning[];
+  /**
+   * True when the translated definition chose the order. The first sense is
+   * marked only then: otherwise the order is Lạc Việt's own, most common
+   * first, and says nothing about the definition on screen.
+   */
+  ranked: boolean;
 }
 
 /** "bờ; dải (dải đất dọc theo hai bên bờ sông)" split at the parenthesis. */

@@ -95,6 +95,9 @@ pub struct VocabTreeInput {
 #[serde(rename_all = "camelCase")]
 pub struct VocabCard {
     pub vocab_id: i64,
+    /// The `vocab_definitions` row this card shows. The popup keys its stored
+    /// Vietnamese definition on it.
+    pub definition_id: i64,
     pub word: String,
     pub source: WordSource,
     pub part_of_speech: String,
@@ -123,6 +126,7 @@ pub fn build_cards(words: &[VocabWord]) -> Vec<VocabCard> {
                     position += 1;
                     cards.push(VocabCard {
                         vocab_id: word.id,
+                        definition_id: definition.id,
                         word: word.word.clone(),
                         source: word.source,
                         part_of_speech: entry.part_of_speech.clone(),
