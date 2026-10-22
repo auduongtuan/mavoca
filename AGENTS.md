@@ -41,9 +41,10 @@ and `src-tauri/tauri.conf.json`.
   and listens for Rust events: `vocab-changed`, `vocab-list-changed`, and
   `vocab-empty`. Rotation is driven by commands, not by index math in React.
 - `src/components/VocabCard.tsx` renders the compact menu bar popup card: one
-  definition at a time, the pronunciation of the entry it belongs to, and the
-  word's Lạc Việt meaning. It also holds the session translation cache, so
-  stepping through a word's definitions does not re-ask Rust for a meaning it
+  English definition at a time with the pronunciation of the entry it belongs
+  to, and beneath it the Vietnamese section for that entry, which the stepper
+  leaves alone. It also holds the session translation cache, so stepping
+  through a word's definitions does not re-ask Rust for a translation it
   already has (see Translation).
 - `src/components/VocabManager.tsx` renders the dark/light manager UI and calls
   commands for list, add, refresh, create, update, and delete.
@@ -109,6 +110,8 @@ Tables:
   - `pron_us TEXT NOT NULL DEFAULT ''`
   - `guide_word TEXT NOT NULL DEFAULT ''`
   - `definition TEXT NOT NULL`
+  - `definition_vi TEXT NOT NULL DEFAULT ''` — the machine translation of
+    `definition`, empty until it has been translated
   - `examples TEXT NOT NULL DEFAULT '[]'` — JSON array of strings
   - `sort_order INTEGER NOT NULL`
 - `settings`
@@ -121,6 +124,12 @@ on consecutive `guide_word`. The schema does not enforce tree consistency;
 write goes through `save_word_tree`, which wraps the word row and its
 definitions in one transaction.
 
+`definition_vi` is a cache of a translation, not content: it belongs to the
+English text beside it, so `replace_word_definitions` copies the stored value
+across when the definition text is unchanged and leaves it empty otherwise.
+Nothing else in the tree round-trip carries it — the editor neither reads nor
+writes it. Lạc Việt's own senses are never stored; see Translation.
+
 `PRAGMA foreign_keys = ON` must be set on the connection or the cascade never
 fires and deleting a word leaves orphaned definitions behind.
 
@@ -129,9 +138,15 @@ Databases created before this schema are migrated on launch by
 the US pronunciation, `meaning` the single definition, and `example` its only
 example. The migration is transactional and idempotent.
 
+A column added later is handled separately, because `CREATE TABLE IF NOT EXISTS`
+leaves an existing table alone: `ensure_definition_vi_column` checks
+`table_columns` and issues an `ALTER TABLE`, once per launch. Add columns that
+way rather than editing the `CREATE` alone, which only new databases would get.
+
 The frontend mirrors these shapes in `src/types.ts` using camelCase:
 `VocabWord` holds `entries`, `source`, and `definitionCount`; `VocabCardData` is
-one flattened definition with `position` and `total` for the popup.
+one flattened definition with `definitionId`, `position`, and `total` for the
+popup.
 
 ## Open At Login
 
@@ -266,52 +281,76 @@ cd src-tauri && cargo test -- --ignored --nocapture
 
 ## Translation
 
-Every popup card shows the word's Vietnamese meaning from Lạc Việt under the
-definition, and the VI button adds the definition translated into Vietnamese.
-Both come from one `translate_card` call, which `src-tauri/src/vietnamese.rs`
-implements, made whenever the popup is open on a card. Examples stay in
-English. Nothing is stored.
+A card is two sections, not one translated block: the English definition follows
+the definition stepper, and the Vietnamese entry below it does not follow it.
+They are separate on purpose. Lạc Việt numbers its senses its own way, merges
+homographs under one part of speech, and has no notion of the guide words
+Cambridge uses, so no sense it holds can be called the translation of the
+definition on screen. Examples stay in English.
 
+- `src-tauri/src/vietnamese.rs` implements both halves, and the popup asks for
+  them separately: `lac_viet_meaning(word, part_of_speech, definition_id)` and
+  `translate_definition(definition, definition_id)`, plus `translate_word(word)`
+  for the case where Lạc Việt has no entry. The first is a local dictionary
+  lookup and returns at once; the second takes about a second and is not
+  allowed to hold the Vietnamese section back.
+- The word comes from Từ điển Lạc Việt, the English–Vietnamese dictionary
+  installed with macOS, read through the same bridge as the Oxford lookup. Its
+  groups are filtered by part of speech (`PART_OF_SPEECH_LABELS`, longest key
+  first, so `pronoun` is not caught by `noun`); two groups carrying the same
+  label are Lạc Việt homographs and are shown joined under one label. No group
+  matches — the POS is unknown, or the entry has none — and every group is
+  offered rather than none.
+- `rank_senses` puts the sense sharing the most syllables with the translated
+  definition first, and only ever reorders. Lạc Việt's senses do not line up
+  with the English ones, so the rest stay visible and the section shows the
+  first `SENSES_SHOWN` under a "N more" expand. Below `MIN_SENSE_OVERLAP` shared
+  syllables, or with no translation to compare against, the order is Lạc
+  Việt's own, most common first, and `ranked` is false so the UI marks nothing:
+  the first sense is highlighted only when the definition actually moved it
+  there.
+- Each sense arrives split into its headline ("bờ; dải") and the explanation in
+  parentheses after it (`split_sense`).
 - The definition goes through Apple's on-device Translation framework, via the
   `translation-rs` crate. It is free, offline, and private, but the English and
   Vietnamese packs must be downloaded in System Settings → General → Language &
   Region → Translation Languages; without them `translator.rs` returns a hint
   saying so. Manual sessions need macOS 26 or later.
-- The word comes from Từ điển Lạc Việt, the English–Vietnamese dictionary
-  installed with macOS, read through the same bridge as the Oxford lookup. Its
-  senses are filtered by part of speech (`PART_OF_SPEECH_LABELS`), and
-  `pick_sense` chooses the one sharing the most syllables with the translated
-  definition, because Lạc Việt numbers senses differently from Oxford or
-  Cambridge. Fewer than `MIN_SENSE_OVERLAP` shared syllables keeps the first,
-  most common sense. The sense is returned as `meaning`, split into its
-  headline ("bờ; dải") and the explanation in parentheses after it. When Lạc
-  Việt has no entry, `meaning` is null and the word is machine translated,
-  shown only under VI; when the translator fails but Lạc Việt has the word,
-  the card shows its first sense with no translated definition.
-- The translator takes about a second per sentence and five or more after its
-  model has been unloaded, and picking the sense waits on it, so the meaning
-  appears a moment after the card. Results are cached in `vietnamese.rs`, and
-  the cache lock is held for a whole translation, so overlapping calls for a
-  card wait for the first instead of translating twice. The word is only
-  machine translated when Lạc Việt lacks it.
-- Lạc Việt is not saved with the word: the lookup is local and instant, its
-  senses do not line up with the stored ones, and saving would copy licensed
-  dictionary text into the backup.
+- Phrasal verbs are not special-cased for Lạc Việt: a card whose part of speech
+  is `phrasal verb` matches on the `verb` it contains.
+- The translated definition is **stored**, in `vocab_definitions.definition_vi`,
+  so a card is translated once per definition. Lạc Việt's senses are **not**
+  stored: Từ điển Lạc Việt is licensed, its text does not line up with the rows,
+  and `VACUUM INTO` copies the whole database into Dropbox. Only machine output
+  for our own English text is written.
+- A stored translation belongs to the English text, not to the row:
+  `replace_word_definitions` carries the translations of unchanged definitions
+  over and drops the rest, so a manager save or a re-fetch keeps them and a
+  re-worded definition is translated again. Row ids are reused by SQLite after
+  a replace, which is why `VocabCard` keys its session cache on
+  word + part of speech + definition rather than on the id.
+- Results are cached in `vietnamese.rs` too, and the cache lock is held for a
+  whole translation, so overlapping calls for one text wait for the first
+  instead of translating twice.
 - `translator.rs` and `vietnamese.rs` have no database or Tauri dependencies,
   like `dictionary.rs`.
-- The framework finishes its work on the main queue. `translate_card` is an
-  `async` command that moves the work to `spawn_blocking`; calling the
-  translator from the main thread, including from a synchronous command,
-  stalls until the bridge times out. For the same reason the translator cannot
-  run in `cargo test`; the `#[ignore]`d `lac_viet_is_readable_and_still_parses`
-  test feeds hand-written Vietnamese to the sense picker instead.
+- The framework finishes its work on the main queue. The translation commands
+  are `async` and move the work to `spawn_blocking`; calling the translator
+  from the main thread, including from a synchronous command, stalls until the
+  bridge times out. For the same reason the translator cannot run in
+  `cargo test`; the `#[ignore]`d `lac_viet_is_readable_and_still_parses` test
+  feeds hand-written Vietnamese to the ranker instead.
 - `build.rs` adds `-rpath /usr/lib/swift`. The crate sets it for itself but it
   does not propagate, and without it the app aborts at launch with
   `Library not loaded: @rpath/libswift_Concurrency.dylib`.
 - `App.tsx` keys `VocabCard` by card, so a new card starts untranslated.
   `VocabCard` keeps a session cache keyed by word, part of speech, and
-  definition, so stepping through a word's definitions keeps the meaning it
+  definition, so stepping through a word's definitions keeps the translation it
   already fetched instead of blanking until Rust answers again.
+- The translation is fetched as soon as the card is visible, not when VI is
+  pressed: it is what orders the Lạc Việt senses, and it is stored once. Cards
+  mounted while the popup is hidden are skipped, so the rotation does not
+  translate words nobody is looking at.
 
 ## Tray And Window Behavior
 
@@ -395,6 +434,15 @@ English. Nothing is stored.
   dictionary carries one transcription, Cambridge carries both.
 - Keep manager and settings visually aligned with the current restrained
   dark/light UI.
+- The card body is two sections with their own `.section-label` heading,
+  English and Tiếng Việt, divided by a hairline. A step replaces the English
+  section and leaves the Vietnamese one in place: it is the entry's meaning,
+  not the definition's, so it must not move with the stepper.
+- A Lạc Việt sense is shown as a bulleted `.sense` with its headline in bold and
+  the explanation after it, three at a time under a `+N more` toggle
+  (`SENSES_SHOWN`). Only the first sense is filled in, and only when the
+  translated definition ranked it there — do not present a sense as *the*
+  translation, because it is not one.
 - Primary buttons should use a solid background.
 - Never use `window.confirm`, `alert`, or `prompt`. The macOS webview does
   not implement them: `confirm` returns false without showing anything, so the
