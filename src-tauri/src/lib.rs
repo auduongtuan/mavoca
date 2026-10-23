@@ -1643,7 +1643,16 @@ async fn translate_word(word: String) -> Result<String, String> {
 fn show_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
     *state.is_window_visible.lock().unwrap() = true;
     if let Some(window) = app.get_webview_window("main") {
-        let _ = position_popup_window(&window);
+        // Shown from the frontend after a word was added, so there is no click
+        // on the menu bar item to line the popup up with: the item's own frame
+        // is the anchor instead, and the corner is only a fallback.
+        #[cfg(target_os = "macos")]
+        let placed = position_popup_under_tray(&window);
+        #[cfg(not(target_os = "macos"))]
+        let placed = false;
+        if !placed {
+            let _ = position_popup_window(&window);
+        }
         show_window(&window, true);
         set_tray_highlighted(&app, true);
     }
@@ -1760,6 +1769,63 @@ fn position_popup_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     }))?;
 
     Ok(())
+}
+
+/// Where the menu bar item sits, as the centre of its button and the distance
+/// from the top of the screen down to that button's lower edge, in points.
+///
+/// The item is reached through its button, like the highlight is: Tauri 2.7
+/// exposes no frame for a tray icon. AppKit measures screen coordinates from
+/// the bottom left, so the window hosting the button is what turns them round:
+/// it is the menu bar's own strip, flush with the top of the screen whether it
+/// spans the whole bar or, as on macOS 27, only the item.
+#[cfg(target_os = "macos")]
+fn tray_item_position() -> Option<(f64, f64)> {
+    let mtm = objc2::MainThreadMarker::new()?;
+    let status_item = find_status_item(mtm)?;
+
+    unsafe {
+        let button: *mut objc2::runtime::AnyObject = objc2::msg_send![&*status_item, button];
+        if button.is_null() {
+            return None;
+        }
+        let ns_window: *mut objc2::runtime::AnyObject = objc2::msg_send![button, window];
+        if ns_window.is_null() {
+            return None;
+        }
+
+        let bounds: objc2_foundation::NSRect = objc2::msg_send![button, bounds];
+        let in_window: objc2_foundation::NSRect = objc2::msg_send![
+            button,
+            convertRect: bounds,
+            toView: std::ptr::null::<objc2::runtime::AnyObject>()
+        ];
+        let item: objc2_foundation::NSRect =
+            objc2::msg_send![ns_window, convertRectToScreen: in_window];
+        let host_window: objc2_foundation::NSRect = objc2::msg_send![ns_window, frame];
+
+        let screen_top = host_window.origin.y + host_window.size.height;
+        Some((
+            item.origin.x + item.size.width / 2.0,
+            screen_top - item.origin.y,
+        ))
+    }
+}
+
+/// Puts the popup under the menu bar item, centred on it, and reports whether
+/// the item could be found.
+#[cfg(target_os = "macos")]
+fn position_popup_under_tray(window: &tauri::WebviewWindow) -> bool {
+    let Some((center_x, top)) = tray_item_position() else {
+        return false;
+    };
+    let Ok(Some(monitor)) = window.primary_monitor() else {
+        return false;
+    };
+
+    // The item lives in points; window positions are physical pixels.
+    let scale_factor = monitor.scale_factor();
+    position_popup_at_click(window, center_x * scale_factor, top * scale_factor).is_ok()
 }
 
 fn position_popup_at_click(
@@ -2077,7 +2143,13 @@ pub fn run() {
                             let _ = window.hide();
                         } else {
                             *state.is_window_visible.lock().unwrap() = true;
-                            let _ = position_popup_at_click(&window, position.x, position.y);
+                            #[cfg(target_os = "macos")]
+                            let placed = position_popup_under_tray(&window);
+                            #[cfg(not(target_os = "macos"))]
+                            let placed = false;
+                            if !placed {
+                                let _ = position_popup_at_click(&window, position.x, position.y);
+                            }
                             show_window(&window, true);
                         }
                         set_tray_highlighted(app, !is_visible);

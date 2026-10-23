@@ -416,8 +416,17 @@ Mavoca is a menu bar extra, not an app in the Dock.
   reached through the `NSStatusBarButton` in the app's status bar window. Every
   path that shows or hides the popup must call `set_tray_highlighted`.
 - The main popup is hidden on startup and hidden again when it loses focus.
-- Popup positioning is handled in Rust and uses the click position when opened
-  from the tray.
+- Popup positioning is handled in Rust and is anchored to the menu bar item, not
+  to the screen or to a click: `position_popup_under_tray` centres the popup
+  under the status item's button and puts its top edge just below the menu bar.
+  The item's frame is read from AppKit, because Tauri 2.7 exposes none for a tray
+  icon, and it is the only anchor that fits the case where no click happened at
+  all — quick-add shows the popup from the frontend after a word is added. The
+  old corner fallback (`position_popup_window`) only runs when the item cannot be
+  found, and a tray click only falls back to its click position for the same
+  reason. Note that a position set from the main thread is applied by the event
+  loop after the command returns: reading `outer_position` in the same breath
+  shows the stale one, which is not a positioning failure.
 - The popup fits its card. `usePopupAutoResize` watches the card with a
   `ResizeObserver` and calls `resize_popup`, which clamps the height between
   `POPUP_MIN_HEIGHT` and `POPUP_MAX_HEIGHT` and to the room left on screen;
