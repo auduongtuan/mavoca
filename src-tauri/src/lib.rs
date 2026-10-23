@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, fs};
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     Emitter, Manager, Runtime,
 };
 
@@ -28,8 +28,10 @@ const ADD_WORD_SHORTCUT_SETTING: &str = "add_word_shortcut";
 /// Global shortcut that opens the quick-add window. An empty setting disables it.
 const DEFAULT_ADD_WORD_SHORTCUT: &str = "Cmd+Ctrl+Shift+N";
 const QUICK_ADD_WINDOW_LABEL: &str = "quick-add";
+
 const TRAY_OPEN_MANAGER_ID: &str = "open-manager";
 const TRAY_OPEN_SETTINGS_ID: &str = "open-settings";
+const TRAY_QUIT_ID: &str = "quit";
 const ROTATION_INTERVAL_SETTING: &str = "rotation_interval_secs";
 /// Seconds between words while the popup is hidden; 0 turns rotation off.
 const DEFAULT_ROTATION_INTERVAL_SECS: u64 = 10;
@@ -931,6 +933,155 @@ fn update_tray_title(app: &tauri::AppHandle, word: &str) {
     }
 }
 
+#[cfg(target_os = "macos")]
+use objc2::ClassType;
+
+#[cfg(target_os = "macos")]
+objc2::define_class!(
+    /// A panel that can take the keyboard while the app stays in the background.
+    ///
+    /// `NSPanel` only becomes key when it has a title bar or a resize bar, and a
+    /// frameless window has neither, so the answer is written out here. The
+    /// class carries no instance variables of its own: `convert_to_panel`
+    /// retypes a window in place, and that only survives if the new class has
+    /// exactly the layout of the old one.
+    #[unsafe(super(objc2_app_kit::NSPanel))]
+    #[thread_kind = objc2::MainThreadOnly]
+    #[name = "MavocaPanel"]
+    #[ivars = ()]
+    struct MavocaPanel;
+
+    impl MavocaPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn __can_become_key_window(&self) -> bool {
+            true
+        }
+    }
+);
+
+/// Turns a window into a non-activating panel, so it takes the keyboard without
+/// activating the app.
+///
+/// macOS does not activate an agent app (`LSUIElement`) that asks for it, and a
+/// plain `NSWindow` only holds the keyboard while its app is active. A panel
+/// carrying the `NSWindowStyleMaskNonactivatingPanel` mask is key *without* the
+/// app being activated — the arrangement Spotlight, Alfred, and every other
+/// agent app relies on.
+///
+/// **Off by default.** Retyping a window in place works for the keyboard — the
+/// quick-add window took typing while another app stayed in front — but on
+/// macOS 27 every window is an `AppKit._NSGlassEffectWindow`, and replacing that
+/// class takes its mouse hit testing with it: a click inside the manager lands
+/// on whatever is behind it, and one attempt aborted the app on a foreign
+/// exception thrown out of AppKit. The panel is kept behind `MAVOCA_PANEL_MODE`
+/// (`full` turns it on) until it can be built the way AppKit expects, by
+/// creating the panel rather than converting one.
+///
+/// Called on every show: the manager and settings windows are destroyed when
+/// they close, so the window that comes back is a fresh one.
+#[cfg(target_os = "macos")]
+fn attach_panel(window: &tauri::WebviewWindow, floating: bool) {
+    if objc2::MainThreadMarker::new().is_some() {
+        convert_to_panel(window, floating);
+        return;
+    }
+
+    // AppKit only lets the main thread near this, and the class is registered
+    // on the way in.
+    let window = window.clone();
+    let _ = window
+        .clone()
+        .run_on_main_thread(move || convert_to_panel(&window, floating));
+}
+
+#[cfg(target_os = "macos")]
+fn panel_mode() -> String {
+    std::env::var("MAVOCA_PANEL_MODE").unwrap_or_else(|_| "off".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn convert_to_panel(window: &tauri::WebviewWindow, floating: bool) {
+    unsafe extern "C" {
+        fn object_setClass(
+            object: *mut objc2::runtime::AnyObject,
+            class: *const objc2::runtime::AnyClass,
+        ) -> *const objc2::runtime::AnyClass;
+    }
+
+    let mode = panel_mode();
+    if mode == "off" || objc2::MainThreadMarker::new().is_none() {
+        return;
+    }
+    let Ok(ns_window) = window.ns_window() else {
+        return;
+    };
+    unsafe {
+        let object = ns_window.cast::<objc2::runtime::AnyObject>();
+        object_setClass(object, MavocaPanel::class() as *const _);
+        if mode == "class" {
+            return;
+        }
+
+        // The window is an `NSPanel` now; only the mask is left to change.
+        let panel = &*object.cast::<objc2_app_kit::NSPanel>();
+        let mask = panel.styleMask() | objc2_app_kit::NSWindowStyleMask::NonactivatingPanel;
+        panel.setStyleMask(mask);
+        // Retyping skips `NSPanel`'s own initialization, and `setStyleMask:` does
+        // not update the tag the window server uses to decide whether opening
+        // the window activates the app.
+        let selector = objc2::sel!(_setPreventsActivation:);
+        let responds: bool = objc2::msg_send![panel, respondsToSelector: selector];
+        if responds {
+            let nonactivating = panel
+                .styleMask()
+                .contains(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel);
+            let _: () = objc2::msg_send![panel, _setPreventsActivation: nonactivating];
+        }
+        if mode != "full" {
+            return;
+        }
+        panel.setFloatingPanel(floating);
+        panel.setHidesOnDeactivate(false);
+        panel.setBecomesKeyOnlyIfNeeded(false);
+        panel.setReleasedWhenClosed(false);
+        // A panel is allowed over full screen apps and follows the user to
+        // whichever space is in front, like the menu bar item it belongs to.
+        panel.setCollectionBehavior(
+            panel.collectionBehavior()
+                | objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces
+                | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
+    }
+}
+
+/// Gives a window the keyboard after it is shown.
+///
+/// With panels off this is `Window::set_focus`, which is what an agent app can
+/// ask for: tao orders the window front and asks macOS to activate the app,
+/// and the system grants it only around a real click. With panels on the panel
+/// is keyed directly, which is all a window needs to take typing.
+#[cfg(target_os = "macos")]
+fn make_panel_key(window: &tauri::WebviewWindow) {
+    if panel_mode() == "off" {
+        let _ = window.set_focus();
+        return;
+    }
+    let window = window.clone();
+    let _ = window.clone().run_on_main_thread(move || {
+        if objc2::MainThreadMarker::new().is_none() {
+            return;
+        }
+        let Ok(ns_window) = window.ns_window() else {
+            return;
+        };
+        unsafe {
+            let panel = &*(ns_window.cast::<objc2_app_kit::NSPanel>());
+            panel.makeKeyAndOrderFront(None);
+            panel.makeKeyWindow();
+        }
+    });
+}
+
 /// Keeps the menu bar item highlighted while the popup is open, the way macOS
 /// highlights an item while its own menu or popover is open.
 ///
@@ -1493,8 +1644,7 @@ fn show_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
     *state.is_window_visible.lock().unwrap() = true;
     if let Some(window) = app.get_webview_window("main") {
         let _ = position_popup_window(&window);
-        let _ = window.show();
-        let _ = window.set_focus();
+        show_window(&window, true);
         set_tray_highlighted(&app, true);
     }
 }
@@ -1505,12 +1655,7 @@ fn show_manager_window(app: tauri::AppHandle) -> Result<(), String> {
         return Err("Manager window was not found".into());
     };
 
-    window
-        .show()
-        .map_err(|err| format!("Failed to show manager: {err}"))?;
-    window
-        .set_focus()
-        .map_err(|err| format!("Failed to focus manager: {err}"))?;
+    show_window(&window, false);
     Ok(())
 }
 
@@ -1520,38 +1665,37 @@ fn show_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         return Err("Settings window was not found".into());
     };
 
-    window
-        .show()
-        .map_err(|err| format!("Failed to show settings: {err}"))?;
-    window
-        .set_focus()
-        .map_err(|err| format!("Failed to focus settings: {err}"))?;
+    show_window(&window, false);
     Ok(())
 }
 
 /// Opens the quick-add window; the add-word shortcut lands here.
 fn show_quick_add_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) {
-        activate_app();
         let _ = window.center();
-        let _ = window.show();
-        let _ = window.set_focus();
+        show_window(&window, true);
     }
 }
 
-/// Brings the app to the front before a window is shown from a global
-/// shortcut, while another app is still active. `set_focus` only asks with the
-/// deprecated `activateIgnoringOtherApps`, which macOS 14 and later may refuse:
-/// the window becomes key for a moment, loses it again, and its blur handler
-/// hides it.
-fn activate_app() {
+/// Shows a window and gives it the keyboard.
+///
+/// The app is a menu bar agent: it has no Dock icon and no Cmd+Tab row, and
+/// `LSUIElement` is what keeps it that way, whether or not a window is open.
+fn show_window(window: &tauri::WebviewWindow, floating: bool) {
     #[cfg(target_os = "macos")]
-    {
-        if let Some(mtm) = objc2::MainThreadMarker::new() {
-            // Unsafe only because `activate` was added in macOS 14; the app
-            // already needs macOS 26 for translation.
-            unsafe { objc2_app_kit::NSApplication::sharedApplication(mtm).activate() };
-        }
+    attach_panel(window, floating);
+    #[cfg(not(target_os = "macos"))]
+    let _ = floating;
+
+    let _ = window.show();
+    #[cfg(target_os = "macos")]
+    make_panel_key(window);
+}
+
+/// Shows a window opened from the tray menu.
+fn show_tray_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        show_window(&window, true);
     }
 }
 
@@ -1699,7 +1843,14 @@ fn build_tray_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
     )?;
     let settings_item =
         MenuItem::with_id(app, TRAY_OPEN_SETTINGS_ID, "Settings", true, None::<&str>)?;
-    Menu::with_items(app, &[&manager_item, &settings_item])
+    // The app is an agent (`LSUIElement`), so it has no Dock icon, no app menu
+    // and no row in Force Quit: without this item there is no way to quit it.
+    let quit_item = MenuItem::with_id(app, TRAY_QUIT_ID, "Quit Mavoca", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    Menu::with_items(
+        app,
+        &[&manager_item, &settings_item, &separator, &quit_item],
+    )
 }
 
 /// The menu is deliberately not attached to the tray item. On macOS 27 an
@@ -1758,6 +1909,12 @@ pub fn run() {
             delete_vocab
         ])
         .setup(move |app| {
+            // `Info.plist` already asks Launch Services for an agent app, so the
+            // Dock icon never appears in the bundle. Setting the policy here as
+            // well keeps `tauri dev` (which only injects that file) consistent.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             setup_system_tray(app.handle())?;
 
             #[cfg(target_os = "macos")]
@@ -1890,16 +2047,9 @@ pub fn run() {
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
-            TRAY_OPEN_MANAGER_ID => {
-                if let Some(window) = app.get_webview_window("manager") {
-                    let _ = window.show().and_then(|_| window.set_focus());
-                }
-            }
-            TRAY_OPEN_SETTINGS_ID => {
-                if let Some(window) = app.get_webview_window("settings") {
-                    let _ = window.show().and_then(|_| window.set_focus());
-                }
-            }
+            TRAY_QUIT_ID => app.exit(0),
+            TRAY_OPEN_MANAGER_ID => show_tray_window(app, "manager"),
+            TRAY_OPEN_SETTINGS_ID => show_tray_window(app, "settings"),
             _ => {}
         })
         .on_tray_icon_event(move |tray, event| {
@@ -1928,7 +2078,7 @@ pub fn run() {
                         } else {
                             *state.is_window_visible.lock().unwrap() = true;
                             let _ = position_popup_at_click(&window, position.x, position.y);
-                            let _ = window.show().and_then(|_| window.set_focus());
+                            show_window(&window, true);
                         }
                         set_tray_highlighted(app, !is_visible);
                     }

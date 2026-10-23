@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mavoca is a menu bar extra, not an app in the Dock: Launch Services
+	     runs it as an agent, so no Dock icon, no Cmd+Tab entry and no row in
+	     Force Quit. Tauri merges this file into the bundle's Info.plist. -->
+	<key>LSUIElement</key>
+	<true/>
+</dict>
+</plist>

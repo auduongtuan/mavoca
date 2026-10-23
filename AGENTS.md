@@ -352,6 +352,39 @@ definition on screen. Examples stay in English.
   mounted while the popup is hidden are skipped, so the rotation does not
   translate words nobody is looking at.
 
+## Menu Bar Agent
+
+Mavoca is a menu bar extra, not an app in the Dock.
+
+- `src-tauri/Info.plist` sets `LSUIElement`, and Tauri merges it into the
+  bundle's `Info.plist`. That key is what Launch Services reads: no Dock icon,
+  no Cmd+Tab row, no Force Quit row, whether or not a window is open. Setting
+  the policy only at runtime leaves a Dock icon on screen for the first frames
+  of the launch, which is why the plist carries it too. `setup` still calls
+  `set_activation_policy(Accessory)` so `bun run tauri dev`, which never sees
+  the bundle plist, behaves the same.
+- An agent app cannot be activated. `NSApp.activate` is refused, and switching
+  the policy to `Regular` to get around it does not hold: macOS grants the
+  activation for a couple of seconds around the click that asked for it and
+  then hands the front back, so a window that started typing stops mid-word and
+  the blur handler closes it. Do not reintroduce policy promotion.
+- So a window only holds the keyboard around the user's own click, and the tray
+  menu therefore has a `Quit Mavoca` item: with no Dock icon and no Cmd+Tab
+  row, it is the only way to quit the app.
+- `MavocaPanel`, `attach_panel`, `convert_to_panel`, and `make_panel_key` are a
+  non-activating panel (`NSWindowStyleMaskNonactivatingPanel`) that would let an
+  inactive app type into its windows, the arrangement Spotlight and Alfred use.
+  They are **off by default**, behind `MAVOCA_PANEL_MODE=full`. Retyping a
+  window with `object_setClass` does give it the keyboard while another app
+  stays in front — `quick-add` took typing and wrote the word — but on macOS 27
+  every window is an `AppKit._NSGlassEffectWindow`, and replacing that class
+  loses the window's mouse hit testing: a click inside the manager lands on
+  whatever is behind it, and one attempt aborted the app on an Objective-C
+  exception unwinding through Rust. Turning panels on for real means creating
+  the `NSPanel` rather than converting an existing window, which needs the
+  window to come from `tauri-nspanel` or from our own `NSWindow` rather than
+  from `WebviewWindowBuilder`.
+
 ## Tray And Window Behavior
 
 - The tray title is the current vocabulary word.
@@ -361,6 +394,7 @@ definition on screen. Examples stay in English.
 - Right click opens the tray menu with:
   - `Vocabulary Manager`
   - `Settings`
+  - `Quit Mavoca`
 - The tray menu must not open on left click. Keep both config keys false:
   - `menuOnLeftClick`
   - `showMenuOnLeftClick`
