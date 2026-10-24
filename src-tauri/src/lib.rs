@@ -1,3 +1,4 @@
+mod completion;
 mod dictionary;
 #[cfg(target_os = "macos")]
 mod macos_dictionary;
@@ -28,6 +29,12 @@ const ADD_WORD_SHORTCUT_SETTING: &str = "add_word_shortcut";
 /// Global shortcut that opens the quick-add window. An empty setting disables it.
 const DEFAULT_ADD_WORD_SHORTCUT: &str = "Cmd+Ctrl+Shift+N";
 const QUICK_ADD_WINDOW_LABEL: &str = "quick-add";
+/// The quick-add window's own size, from `tauri.conf.json`: the field, the
+/// status line and the window's padding. It grows downward while its suggestion
+/// list is open and is put back to this height after.
+const QUICK_ADD_WIDTH: f64 = 420.0;
+const QUICK_ADD_HEIGHT: f64 = 94.0;
+const QUICK_ADD_MAX_HEIGHT: f64 = 420.0;
 
 const TRAY_OPEN_MANAGER_ID: &str = "open-manager";
 const TRAY_OPEN_SETTINGS_ID: &str = "open-settings";
@@ -37,6 +44,9 @@ const ROTATION_INTERVAL_SETTING: &str = "rotation_interval_secs";
 const DEFAULT_ROTATION_INTERVAL_SECS: u64 = 10;
 /// Upper bound accepted from the settings window, one hour.
 const MAX_ROTATION_INTERVAL_SECS: u64 = 3600;
+/// Suggestions the add-word field shows at once. Each costs a row, and the list
+/// is capped by the window height, not by this.
+const MAX_SUGGESTIONS: usize = 6;
 /// How often the rotation thread checks the popup and the interval, so a new
 /// interval or a closed popup takes effect within a second.
 const ROTATION_TICK: Duration = Duration::from_secs(1);
@@ -1427,6 +1437,81 @@ fn save_word_tree(
     Ok(vocab_id)
 }
 
+/// A word offered under the add-word field.
+#[derive(Serialize)]
+struct WordSuggestion {
+    word: String,
+    /// Already in the vocabulary: the list doubles as a duplicate warning, and
+    /// those words are listed first.
+    saved: bool,
+}
+
+/// Words to offer while typing in the add-word window.
+///
+/// Saved words first, matching what `add_vocab_word` would refuse as a
+/// duplicate; the system word list then fills the list up. The frontend debounces
+/// this, so one call answers one pause in typing rather than every keystroke.
+#[tauri::command]
+fn suggest_words(
+    state: tauri::State<AppState>,
+    prefix: String,
+) -> Result<Vec<WordSuggestion>, String> {
+    let prefix = normalize_text(&prefix).to_lowercase();
+    if prefix.chars().count() < 2 {
+        return Ok(Vec::new());
+    }
+
+    let saved = {
+        let conn = state.db.lock().unwrap();
+        saved_words_starting_with(&conn, &prefix, MAX_SUGGESTIONS)?
+    };
+
+    let taken: Vec<String> = saved.iter().map(|word| word.to_lowercase()).collect();
+    let mut suggestions: Vec<WordSuggestion> = saved
+        .into_iter()
+        .map(|word| WordSuggestion { word, saved: true })
+        .collect();
+
+    // The system list knows the saved words too, so they are skipped rather than
+    // offered twice.
+    for word in completion::suggest(&prefix, MAX_SUGGESTIONS * 2) {
+        if suggestions.len() == MAX_SUGGESTIONS {
+            break;
+        }
+        if taken.contains(&word) {
+            continue;
+        }
+        suggestions.push(WordSuggestion { word, saved: false });
+    }
+
+    Ok(suggestions)
+}
+
+fn saved_words_starting_with(
+    conn: &Connection,
+    prefix: &str,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    // `%` and `_` are LIKE wildcards, and the prefix is text the user typed.
+    let escaped = prefix
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let mut stmt = conn
+        .prepare(
+            "SELECT word FROM vocabs WHERE word LIKE ?1 || '%' ESCAPE '\\' \
+             ORDER BY length(word), word LIMIT ?2",
+        )
+        .map_err(|err| format!("Failed to prepare suggestion query: {err}"))?;
+    let words = stmt
+        .query_map(params![escaped, limit as i64], |row| row.get(0))
+        .map_err(|err| format!("Failed to read suggestions: {err}"))?;
+
+    words
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|err| format!("Failed to read suggestions: {err}"))
+}
+
 /// Adds a word by fetching it and importing every definition, no picker.
 /// Cambridge is tried first; the fetch layer falls back on its own.
 ///
@@ -1681,6 +1766,9 @@ fn show_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 /// Opens the quick-add window; the add-word shortcut lands here.
 fn show_quick_add_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) {
+        // The window hides on blur, list open or not, so each opening starts at
+        // its own height instead of remembering the list's.
+        let _ = window.set_size(tauri::LogicalSize::new(QUICK_ADD_WIDTH, QUICK_ADD_HEIGHT));
         let _ = window.center();
         show_window(&window, true);
     }
@@ -1713,6 +1801,21 @@ fn hide_quick_add_window(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) {
         let _ = window.hide();
     }
+}
+
+/// Grows the quick-add window while its suggestion list is open, and shrinks it
+/// back afterwards. The field sits at a fixed offset from the top of the window,
+/// so only the list gains room and nothing on screen moves.
+#[tauri::command]
+fn resize_quick_add_window(app: tauri::AppHandle, height: f64) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) else {
+        return Err("Add word window was not found".into());
+    };
+
+    let height = height.clamp(QUICK_ADD_HEIGHT, QUICK_ADD_MAX_HEIGHT);
+    window
+        .set_size(tauri::LogicalSize::new(QUICK_ADD_WIDTH, height))
+        .map_err(|err| format!("Failed to resize the add word window: {err}"))
 }
 
 #[tauri::command]
@@ -1965,8 +2068,10 @@ pub fn run() {
             update_settings,
             get_launch_at_login,
             set_launch_at_login,
+            suggest_words,
             add_vocab_word,
             refresh_vocab_word,
+            resize_quick_add_window,
             lac_viet_meaning,
             translate_definition,
             translate_word,
@@ -2018,6 +2123,10 @@ pub fn run() {
 
             app.manage(app_state.clone());
             start_auto_rotation(app.handle().clone(), app_state.clone());
+
+            // Reading the system word list takes a moment; doing it here keeps
+            // the first typed letter in the add-word window from waiting on it.
+            std::thread::spawn(completion::warm);
 
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();

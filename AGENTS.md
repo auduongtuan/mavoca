@@ -56,6 +56,8 @@ and `src-tauri/tauri.conf.json`.
   accelerator string such as `Cmd+Ctrl+Shift+N` and displays it as `⌃⇧⌘N`.
 - `src/components/QuickAdd.tsx` takes a single word and calls `add_vocab_word`,
   which fetches every meaning; on success the meaning popup shows the new word.
+  It also offers completions while the word is typed (see Add Word
+  Suggestions).
 - `src/types.ts` defines frontend types shared across React components.
 - `src/App.css` contains popup, manager, settings, light mode, and dark mode
   styling. It intentionally uses `color-scheme` rather than custom scrollbar
@@ -72,6 +74,9 @@ and `src-tauri/tauri.conf.json`.
   no database or Tauri dependencies.
 - `src-tauri/src/macos_dictionary.rs` and `src-tauri/native/` read the
   dictionaries installed with macOS; `build.rs` compiles the C bridge.
+- `src-tauri/src/completion.rs` answers the add-word field's completions from
+  the word list macOS installs. Like the parsers, it has no database or Tauri
+  dependencies.
 - `src-tauri/tauri.conf.json` configures windows, tray, dev URL, build hooks,
   bundle metadata, and macOS private API access.
 - `src-tauri/capabilities/default.json` must include every window label that
@@ -177,6 +182,38 @@ turns it off. `SettingsPanel` repeats the default for its Reset button.
   trap as the autostart plugin.
 - `add_vocab_word` is `async` and does its work in `spawn_blocking`, so the
   quick-add window keeps painting while the dictionary lookup runs.
+
+## Add Word Suggestions
+
+The add-word field completes what is being typed. A word that is already saved
+is worth nothing here — the window exists to add a new one — so the candidate
+list comes from `/usr/share/dict/words`, the list macOS uses for Look Up and
+spell checking.
+
+- `suggest_words` returns saved words first, flagged `saved`, which doubles as
+  a duplicate warning; the system list fills the rest. Both are prefix matches,
+  and the shortest comes first, since the word closest to what was typed is the
+  likeliest one. Everything is capped at `MAX_SUGGESTIONS` (6).
+- `completion.rs` reads the whole file once, folds it to lowercase, drops
+  entries that are not plain letters (proper nouns, `o'clock`, `e-mail`), sorts
+  and dedupes, and binary searches it. `setup` warms it on a background thread
+  so no keystroke waits for the read; a machine without the file simply gets no
+  completions.
+- The lookup is debounced in `QuickAdd.tsx` (`SUGGEST_DEBOUNCE_MS`), and each
+  answer is dropped when a newer word has superseded it, so one pause in typing
+  costs one query and a slow answer cannot overwrite a newer list.
+- The window is measured to its content: `QuickAdd.tsx` reports the height of
+  `.quick-add-content` plus the window's own padding to
+  `resize_quick_add_window`, so a suggestion takes a row of window and nothing
+  is left over when the list closes. `show_quick_add_window` puts it back to
+  `QUICK_ADD_HEIGHT` on every opening, because it hides on blur and would
+  otherwise remember the height of a list that is gone. `.quick-add` keeps the
+  field at the top of the window rather than centring it, so only the list gains
+  room and nothing on screen moves.
+- Keys: ↓/↑ choose, Enter on a chosen row fills the field, Enter with nothing
+  chosen adds the word, Tab completes, Esc closes the list and only closes the
+  window when the list is already closed. Clicking a row takes it, and
+  `preventDefault` on `mousedown` is what keeps the focus in the field.
 
 ## Backup Behavior
 

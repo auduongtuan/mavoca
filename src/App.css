@@ -1070,11 +1070,18 @@ html, body {
 .quick-add {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 10px;
+  /* The field sits at the top of the window, so the window can grow a
+     suggestion row at a time without anything on screen moving. */
   height: 100vh;
-  padding: 18px 20px;
+  padding: 22px 20px 18px;
   background: transparent;
+}
+
+/* Measured by `QuickAdd.tsx` to size the window to its content. */
+.quick-add-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .quick-add-field {
@@ -1093,6 +1100,42 @@ html, body {
   color: #37352f;
   font-size: 22px;
   font-weight: 600;
+}
+
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Lines the words up with what is being typed: the icon and its gap take 28px,
+     and each row insets its own text by 8px. */
+  margin-left: 20px;
+  list-style: none;
+}
+
+.suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: #37352f;
+  font-size: 15px;
+  cursor: default;
+  user-select: none;
+}
+
+.suggestion[aria-selected='true'] {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.suggestion-tag {
+  color: #9b9a97;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .quick-add-status {
@@ -1544,6 +1587,14 @@ html, body {
   .settings-field code,
   .quick-add-field input {
     color: #e3e2e0;
+  }
+
+  .suggestion {
+    color: #e3e2e0;
+  }
+
+  .suggestion[aria-selected='true'] {
+    background: rgba(255, 255, 255, 0.1);
   }
 
   .shortcut-recorder {

@@ -84,3 +84,10 @@ export interface DictionaryMeaning {
   headline: string;
   explanation: string;
 }
+
+/** One candidate word under the add-word field. */
+export interface WordSuggestion {
+  word: string;
+  /** Already in the vocabulary, so `add_vocab_word` would refuse it. */
+  saved: boolean;
+}

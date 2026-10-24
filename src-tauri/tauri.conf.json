@@ -31,7 +31,7 @@
         "label": "quick-add",
         "title": "Add Word",
         "width": 420,
-        "height": 132,
+        "height": 94,
         "resizable": false,
         "fullscreen": false,
         "decorations": false,
