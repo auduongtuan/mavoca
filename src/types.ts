@@ -91,3 +91,30 @@ export interface WordSuggestion {
   /** Already in the vocabulary, so `add_vocab_word` would refuse it. */
   saved: boolean;
 }
+
+/** One definition shown beside the add-word suggestions. */
+export interface PreviewDefinition {
+  partOfSpeech: string;
+  pronUk: string;
+  pronUs: string;
+  guideWord: string;
+  definition: string;
+}
+
+/**
+ * What the add-word window shows beside the suggestion it has highlighted.
+ *
+ * `saved` was read from the vocabulary, `macos` from the dictionary installed
+ * with macOS, and `none` means that dictionary has no entry — the word can still
+ * be added, because `add_vocab_word` also tries Cambridge.
+ */
+export interface WordPreview {
+  word: string;
+  saved: boolean;
+  source: 'saved' | 'macos' | 'none';
+  definitions: PreviewDefinition[];
+  /** Definitions the entry has, which can be more than are shown. */
+  total: number;
+  /** The stored Vietnamese translation of the first definition, if any. */
+  definitionVi: string | null;
+}

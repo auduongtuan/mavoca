@@ -1108,18 +1108,31 @@ html, body {
 .quick-add {
   display: flex;
   flex-direction: column;
-  /* The field sits at the top of the window, so the window can grow a
-     suggestion row at a time without anything on screen moving. */
+  /* The field sits at the top left of the window, so the window can grow a
+     suggestion row or a meaning pane at a time without anything on screen
+     moving. */
   height: 100vh;
   padding: 22px 20px 18px;
+  overflow: hidden;
   background: transparent;
 }
 
-/* Measured by `QuickAdd.tsx` to size the window to its content. */
+/* Measured by `QuickAdd.tsx` to size the window to its content, so it is as wide
+   as the columns need rather than as wide as the window happens to be. */
 .quick-add-content {
   display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  width: max-content;
+}
+
+/* The field, the list, and the status line: the column the window opens at. */
+.quick-add-main {
+  display: flex;
+  flex: none;
   flex-direction: column;
   gap: 10px;
+  width: 380px;
 }
 
 .quick-add-field {
@@ -1129,7 +1142,7 @@ html, body {
   color: #787774;
 }
 
-.quick-add-field input {
+.quick-add-input {
   flex: 1;
   min-width: 0;
   border: none;
@@ -1164,7 +1177,7 @@ html, body {
   user-select: none;
 }
 
-.suggestion[aria-selected='true'] {
+.suggestion[data-highlighted] {
   background: rgba(0, 0, 0, 0.06);
 }
 
@@ -1183,6 +1196,98 @@ html, body {
 
 .quick-add-status.error {
   color: #c0443a;
+}
+
+/* The meaning of the highlighted suggestion, beside the list. It is what the
+   popup will show once the word is added, so the field never has to be given up
+   to answer "what does this mean?". */
+.quick-add-preview {
+  flex: none;
+  width: 300px;
+  padding-left: 18px;
+  border-left: 1px solid rgba(0, 0, 0, 0.09);
+  color: #37352f;
+}
+
+.preview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.preview-word {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 1px;
+  color: #6b6a67;
+  font-size: 12px;
+}
+
+.preview-pos {
+  color: #6b6a67;
+  font-style: italic;
+}
+
+/* Only when the definitions belong to different parts of speech, so the shared
+   one stays in the header. */
+.preview-text .preview-pos {
+  margin-right: 5px;
+  font-size: 12px;
+}
+
+.preview-definitions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.preview-definition {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.preview-text {
+  display: block;
+}
+
+.preview-note {
+  margin-top: 8px;
+  color: #6b6a67;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.preview-vi {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.preview-vi-label {
+  color: #6b6a67;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .editor-actions {
@@ -1627,7 +1732,7 @@ html, body {
   }
 
   .settings-field code,
-  .quick-add-field input {
+  .quick-add-input {
     color: #e3e2e0;
   }
 
@@ -1635,8 +1740,24 @@ html, body {
     color: #e3e2e0;
   }
 
-  .suggestion[aria-selected='true'] {
+  .suggestion[data-highlighted] {
     background: rgba(255, 255, 255, 0.1);
+  }
+
+  .quick-add-preview {
+    border-left-color: rgba(255, 255, 255, 0.12);
+    color: #e3e2e0;
+  }
+
+  .preview-meta,
+  .preview-pos,
+  .preview-note,
+  .preview-vi-label {
+    color: rgba(255, 255, 255, 0.62);
+  }
+
+  .preview-vi {
+    border-top-color: rgba(255, 255, 255, 0.12);
   }
 
   .suggestion-tag {

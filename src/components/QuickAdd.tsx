@@ -1,21 +1,41 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { Autocomplete } from '@base-ui/react/autocomplete';
 import { MagnifyingGlass } from '@phosphor-icons/react';
-import { VocabWord, WordSuggestion } from '../types';
+import { PreviewDefinition, VocabWord, WordPreview, WordSuggestion } from '../types';
 
 /** One lookup per pause in typing, not one per keystroke. */
 const SUGGEST_DEBOUNCE_MS = 180;
+/** The pane follows the arrow keys, so its lookup waits for a moment's rest. */
+const PREVIEW_DEBOUNCE_MS = 80;
 /** Below two letters every list is noise. */
 const MIN_PREFIX_LEN = 2;
+
+/** The accent-labelled transcriptions of one entry, without repeating a shared one. */
+const pronunciationsOf = (definition: PreviewDefinition): string[] => {
+  const parts: string[] = [];
+  if (definition.pronUk) {
+    parts.push(`UK ${definition.pronUk}`);
+  }
+  if (definition.pronUs && definition.pronUs !== definition.pronUk) {
+    parts.push(`US ${definition.pronUs}`);
+  }
+  return parts;
+};
 
 /**
  * The window the add-word shortcut opens. Only the word is typed; Rust fetches
  * every meaning on save, then the meaning popup shows the new word.
  *
- * Typing offers completions from the saved words and from the system word list.
+ * Typing offers completions from the saved words and from the system word list,
+ * and the highlighted completion shows its meaning beside the list as it moves.
  * Each lookup is debounced and its answer dropped if the word has moved on, so
  * typing never waits on a query it has already made obsolete.
+ *
+ * The list is a Base UI autocomplete in `inline` mode: the window is sized from
+ * the content it measures, so a list that floated above the window could not be
+ * measured at all.
  */
 export const QuickAdd: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -25,15 +45,20 @@ export const QuickAdd: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<WordSuggestion[]>([]);
-  const [activeIndex, setActiveIndex] = useState(-1);
+  /** The suggestion the arrow keys are on, which the pane describes. */
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const [preview, setPreview] = useState<WordPreview | null>(null);
   /** The word whose list was dismissed, so it does not reopen until the next edit. */
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   /** Answers to superseded lookups are ignored rather than shown late. */
   const latestLookup = useRef(0);
+  /** A meaning is looked up once per word per opening, not once per arrow key. */
+  const previewCache = useRef(new Map<string, WordPreview>());
+  const requestedSize = useRef({ width: 0, height: 0 });
 
   const clearSuggestions = () => {
     setSuggestions([]);
-    setActiveIndex(-1);
+    setHighlighted(null);
   };
 
   // The window is hidden, not closed, between uses, so each opening starts fresh.
@@ -45,7 +70,9 @@ export const QuickAdd: React.FC = () => {
       setWord('');
       setError(null);
       clearSuggestions();
+      setPreview(null);
       setDismissedFor(null);
+      previewCache.current.clear();
       if (focused) {
         inputRef.current?.focus();
       }
@@ -63,9 +90,9 @@ export const QuickAdd: React.FC = () => {
     }
   }, [busy]);
 
-  // The window is exactly as tall as the content inside it, so a suggestion
-  // takes a row of window and nothing is left over when the list closes. The
-  // field keeps its place at the top while the list opens below it.
+  // The window is exactly as large as the content inside it, so a suggestion or
+  // a meaning takes its own room and nothing is left over when it closes. The
+  // field keeps its place at the top while the window grows down and right.
   useEffect(() => {
     const content = contentRef.current;
     const main = mainRef.current;
@@ -73,12 +100,19 @@ export const QuickAdd: React.FC = () => {
       return;
     }
     const styles = getComputedStyle(main);
-    const padding = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
-    const height = padding + content.getBoundingClientRect().height;
-    invoke('resize_quick_add_window', { height }).catch((err) => {
+    const width =
+      parseFloat(styles.paddingLeft) + parseFloat(styles.paddingRight) + content.offsetWidth;
+    const height =
+      parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom) + content.offsetHeight;
+    const last = requestedSize.current;
+    if (Math.abs(last.width - width) < 0.5 && Math.abs(last.height - height) < 0.5) {
+      return;
+    }
+    requestedSize.current = { width, height };
+    invoke('resize_quick_add_window', { width, height }).catch((err) => {
       console.error('Failed to resize the add word window', err);
     });
-  }, [suggestions.length]);
+  });
 
   useEffect(() => {
     const prefix = word.trim();
@@ -95,7 +129,6 @@ export const QuickAdd: React.FC = () => {
             return;
           }
           setSuggestions(found);
-          setActiveIndex(-1);
         })
         .catch((err) => {
           console.error('Failed to load word suggestions', err);
@@ -104,6 +137,40 @@ export const QuickAdd: React.FC = () => {
 
     return () => clearTimeout(timer);
   }, [word, busy, dismissedFor]);
+
+  // The pane keeps the meaning it already has while the next one loads, so an
+  // arrow key does not empty the window and resize it twice.
+  useEffect(() => {
+    if (!highlighted) {
+      setPreview(null);
+      return;
+    }
+
+    const cached = previewCache.current.get(highlighted);
+    if (cached) {
+      setPreview(cached);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      invoke<WordPreview>('preview_word', { word: highlighted })
+        .then((found) => {
+          previewCache.current.set(highlighted, found);
+          if (!cancelled) {
+            setPreview(found);
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to preview the highlighted word', err);
+        });
+    }, PREVIEW_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [highlighted]);
 
   const close = () => {
     invoke('hide_quick_add_window').catch((err) => {
@@ -118,6 +185,7 @@ export const QuickAdd: React.FC = () => {
     setBusy(true);
     setError(null);
     clearSuggestions();
+    setPreview(null);
     try {
       const saved = await invoke<VocabWord>('add_vocab_word', { word });
       await invoke('set_current_vocab_id', { id: saved.id });
@@ -136,43 +204,24 @@ export const QuickAdd: React.FC = () => {
     setWord(suggestion.word);
     setDismissedFor(suggestion.word);
     clearSuggestions();
+    setPreview(null);
     inputRef.current?.focus();
   };
 
-  const move = (step: number) => {
-    if (!suggestions.length) {
-      return;
-    }
-    setActiveIndex((current) => {
-      const next = current + step;
-      if (next < 0) {
-        return suggestions.length - 1;
-      }
-      return next >= suggestions.length ? 0 : next;
-    });
-  };
-
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    const active = suggestions[activeIndex];
-
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      move(event.key === 'ArrowDown' ? 1 : -1);
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      if (active) {
-        accept(active);
-      } else {
+    if (event.key === 'Enter') {
+      // A highlighted suggestion is taken by the list's own item handler; Enter
+      // in the field itself adds what was typed.
+      if (!highlighted) {
+        event.preventDefault();
         void add();
       }
-    } else if (event.key === 'Tab' && active) {
-      event.preventDefault();
-      accept(active);
     } else if (event.key === 'Escape') {
       event.preventDefault();
       if (suggestions.length) {
         setDismissedFor(word);
         clearSuggestions();
+        setPreview(null);
       } else {
         close();
       }
@@ -180,58 +229,129 @@ export const QuickAdd: React.FC = () => {
   };
 
   const listOpen = suggestions.length > 0;
+  // The pane describes the highlighted word; while its meaning is still on the
+  // way it holds the word alone rather than emptying the window.
+  const current = preview && highlighted && preview.word === highlighted ? preview : null;
+  const first = current?.definitions[0];
+  const samePartOfSpeech =
+    !!current &&
+    current.definitions.every(
+      (definition) => definition.partOfSpeech === current.definitions[0].partOfSpeech,
+    );
 
   return (
     <main className="quick-add" ref={mainRef}>
-      <div className="quick-add-content" ref={contentRef}>
-        <div className="quick-add-field">
-          <MagnifyingGlass size={18} weight="bold" aria-hidden />
-          <input
-            ref={inputRef}
-            value={word}
-            onChange={(event) => setWord(event.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Add a word"
-            aria-label="Word to add"
-            role="combobox"
-            aria-autocomplete="list"
-            aria-expanded={listOpen}
-            aria-controls={listOpen ? 'word-suggestions' : undefined}
-            aria-activedescendant={listOpen && activeIndex >= 0 ? `suggestion-${activeIndex}` : undefined}
-            disabled={busy}
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-          />
-        </div>
-        {listOpen && (
-          <ul className="suggestions" id="word-suggestions" role="listbox" aria-label="Word suggestions">
-            {suggestions.map((suggestion, index) => (
-              <li
-                key={suggestion.word}
-                id={`suggestion-${index}`}
-                role="option"
-                aria-selected={index === activeIndex}
-                className="suggestion"
+      <Autocomplete.Root
+        items={suggestions}
+        value={word}
+        onValueChange={(value) => setWord(value)}
+        mode="none"
+        // Rust has already filtered, and it searches the whole system word list.
+        filter={null}
+        inline
+        open={listOpen}
+        itemToStringValue={(suggestion: WordSuggestion) => suggestion.word}
+        onItemHighlighted={(suggestion) => setHighlighted(suggestion?.word ?? null)}
+      >
+        <div className="quick-add-content" ref={contentRef}>
+          <div className="quick-add-main">
+            <Autocomplete.InputGroup className="quick-add-field">
+              <MagnifyingGlass size={18} weight="bold" aria-hidden />
+              <Autocomplete.Input
+                ref={inputRef}
+                className="quick-add-input"
+                onKeyDown={handleKeyDown}
+                placeholder="Add a word"
+                aria-label="Word to add"
+                disabled={busy}
+                spellCheck={false}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+              />
+            </Autocomplete.InputGroup>
+            {listOpen && (
+              <Autocomplete.List
+                className="suggestions"
                 // Keep the keystrokes: a click that takes focus out of the field
                 // would close the window through the blur handler.
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  accept(suggestion);
-                }}
-                onMouseEnter={() => setActiveIndex(index)}
+                onMouseDown={(event) => event.preventDefault()}
               >
-                <span className="suggestion-word">{suggestion.word}</span>
-                {suggestion.saved && <span className="suggestion-tag">Saved</span>}
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className={error ? 'quick-add-status error' : 'quick-add-status'}>
-          {error ?? (busy ? 'Looking up meanings…' : 'Enter to add · Esc to close')}
-        </p>
-      </div>
+                {(suggestion: WordSuggestion) => (
+                  <Autocomplete.Item
+                    key={suggestion.word}
+                    value={suggestion}
+                    className="suggestion"
+                    onClick={() => accept(suggestion)}
+                  >
+                    <span className="suggestion-word">{suggestion.word}</span>
+                    {suggestion.saved && <span className="suggestion-tag">Saved</span>}
+                  </Autocomplete.Item>
+                )}
+              </Autocomplete.List>
+            )}
+            <p className={error ? 'quick-add-status error' : 'quick-add-status'}>
+              {error ?? (busy ? 'Looking up meanings…' : 'Enter to add · Esc to close')}
+            </p>
+          </div>
+          {highlighted && (
+            <aside className="quick-add-preview">
+              <header className="preview-head">
+                <span className="preview-word">{highlighted}</span>
+                {current?.saved && <span className="suggestion-tag">Saved</span>}
+              </header>
+              {!current && <p className="preview-note">Looking up…</p>}
+              {current && !first && (
+                <p className="preview-note">
+                  {current.source === 'none'
+                    ? 'Not in the macOS dictionary. Cambridge is tried when you add it.'
+                    : 'No definitions stored for this word.'}
+                </p>
+              )}
+              {current && first && (
+                <>
+                  <p className="preview-meta">
+                    {samePartOfSpeech && (
+                      <span className="preview-pos">{first.partOfSpeech}</span>
+                    )}
+                    {pronunciationsOf(first).map((pronunciation) => (
+                      <span className="preview-ipa" key={pronunciation}>
+                        {pronunciation}
+                      </span>
+                    ))}
+                  </p>
+                  <ol className="preview-definitions">
+                    {current.definitions.map((definition, index) => (
+                      <li className="preview-definition" key={`${definition.definition}-${index}`}>
+                        {definition.guideWord && (
+                          <span className="guide-word">{definition.guideWord}</span>
+                        )}
+                        <span className="preview-text">
+                          {!samePartOfSpeech && (
+                            <span className="preview-pos">{definition.partOfSpeech}</span>
+                          )}
+                          {definition.definition}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                  {current.total > current.definitions.length && (
+                    <p className="preview-note">
+                      {current.total - current.definitions.length} more definitions when added.
+                    </p>
+                  )}
+                  {current.definitionVi && (
+                    <p className="preview-vi">
+                      <span className="preview-vi-label">Tiếng Việt</span>
+                      {current.definitionVi}
+                    </p>
+                  )}
+                </>
+              )}
+            </aside>
+          )}
+        </div>
+      </Autocomplete.Root>
     </main>
   );
 };

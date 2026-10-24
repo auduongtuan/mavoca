@@ -34,7 +34,12 @@ const QUICK_ADD_WINDOW_LABEL: &str = "quick-add";
 /// list is open and is put back to this height after.
 const QUICK_ADD_WIDTH: f64 = 420.0;
 const QUICK_ADD_HEIGHT: f64 = 94.0;
+/// The quick-add window widens by this much while it shows a meaning beside the
+/// list, and no further than that.
+const QUICK_ADD_MAX_WIDTH: f64 = 780.0;
 const QUICK_ADD_MAX_HEIGHT: f64 = 420.0;
+/// Definitions the add-word preview shows before it counts the rest.
+const PREVIEW_DEFINITIONS: usize = 4;
 
 const TRAY_OPEN_MANAGER_ID: &str = "open-manager";
 const TRAY_OPEN_SETTINGS_ID: &str = "open-settings";
@@ -1512,6 +1517,154 @@ fn saved_words_starting_with(
         .map_err(|err| format!("Failed to read suggestions: {err}"))
 }
 
+/// One definition shown beside the add-word list.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewDefinition {
+    part_of_speech: String,
+    pron_uk: String,
+    pron_us: String,
+    guide_word: String,
+    definition: String,
+}
+
+/// The meaning of the suggestion the add-word list has highlighted.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WordPreview {
+    word: String,
+    /// Already in the vocabulary, so adding it would be refused as a duplicate.
+    saved: bool,
+    /// `saved` read the vocabulary, `macos` the installed dictionary, and `none`
+    /// has no entry at all.
+    source: String,
+    definitions: Vec<PreviewDefinition>,
+    /// Definitions the entry has, which can be more than are shown.
+    total: usize,
+    /// The stored Vietnamese translation of the first definition, when there is
+    /// one; only a saved word has any.
+    definition_vi: Option<String>,
+}
+
+/// The meaning of a suggestion, for the pane beside the add-word list.
+///
+/// A saved word is read from the database, so the pane shows exactly what the
+/// user already has and the list doubles as a duplicate warning. Anything else
+/// comes from the dictionary installed with macOS alone: moving through the list
+/// must never touch the network, and `add_vocab_word` still falls back to
+/// Cambridge when the word is actually added.
+///
+/// Async and moved to a worker for the same reason as `lac_viet_meaning`: the
+/// dictionary bridge finishes its work on the main queue.
+#[tauri::command]
+async fn preview_word(
+    state: tauri::State<'_, AppState>,
+    word: String,
+) -> Result<WordPreview, String> {
+    let word = normalize_text(&word);
+    if word.is_empty() {
+        return Err("Enter a word to look up".into());
+    }
+
+    let saved = {
+        let conn = state.db.lock().unwrap();
+        saved_word_preview(&conn, &word)?
+    };
+    if let Some(preview) = saved {
+        return Ok(preview);
+    }
+
+    let lookup = word.clone();
+    let entries =
+        tauri::async_runtime::spawn_blocking(move || dictionary::fetch_macos_word(&lookup))
+            .await
+            .map_err(|err| format!("Dictionary task failed: {err}"))?;
+
+    // A word the installed dictionary does not carry is not an error here: the
+    // pane says so and the word can still be added from Cambridge.
+    Ok(match entries {
+        Ok(entries) => preview_from_entries(word, entries, false, None),
+        Err(_) => WordPreview {
+            word,
+            saved: false,
+            source: "none".into(),
+            definitions: Vec::new(),
+            total: 0,
+            definition_vi: None,
+        },
+    })
+}
+
+fn saved_word_preview(conn: &Connection, word: &str) -> Result<Option<WordPreview>, String> {
+    let vocab_id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM vocabs WHERE word = ?1",
+            params![word],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|err| format!("Failed to read vocabulary: {err}"))?;
+    let Some(vocab_id) = vocab_id else {
+        return Ok(None);
+    };
+
+    let rows = definition_rows_for(conn, vocab_id)?;
+    // The pane stands in for the card, so it carries the translation the card
+    // would show for the definition it puts first.
+    let definition_vi = match rows.first() {
+        Some(row) => stored_definition_vi(conn, row.id)?,
+        None => None,
+    };
+    let entries = rows_to_entries(rows);
+
+    Ok(Some(preview_from_entries(
+        word.to_string(),
+        entries,
+        true,
+        definition_vi,
+    )))
+}
+
+/// Flattens the tree into the first few definitions, which is all the pane has
+/// room for; the popup shows the whole card once the word is added.
+fn preview_from_entries(
+    word: String,
+    entries: Vec<VocabEntry>,
+    saved: bool,
+    definition_vi: Option<String>,
+) -> WordPreview {
+    let mut definitions = Vec::new();
+    for entry in &entries {
+        for group in &entry.sense_groups {
+            for definition in &group.definitions {
+                if definitions.len() == PREVIEW_DEFINITIONS {
+                    break;
+                }
+                definitions.push(PreviewDefinition {
+                    part_of_speech: entry.part_of_speech.clone(),
+                    pron_uk: entry.pron_uk.clone(),
+                    pron_us: entry.pron_us.clone(),
+                    guide_word: group.guide_word.clone(),
+                    definition: definition.definition.clone(),
+                });
+            }
+        }
+    }
+
+    WordPreview {
+        word,
+        saved,
+        source: if saved {
+            "saved".into()
+        } else {
+            "macos".into()
+        },
+        definitions,
+        total: count_definitions(&entries),
+        definition_vi,
+    }
+}
+
 /// Adds a word by fetching it and importing every definition, no picker.
 /// Cambridge is tried first; the fetch layer falls back on its own.
 ///
@@ -1803,18 +1956,23 @@ fn hide_quick_add_window(app: tauri::AppHandle) {
     }
 }
 
-/// Grows the quick-add window while its suggestion list is open, and shrinks it
-/// back afterwards. The field sits at a fixed offset from the top of the window,
-/// so only the list gains room and nothing on screen moves.
+/// Grows the quick-add window while it shows a suggestion list or a meaning, and
+/// shrinks it back afterwards. The field sits at a fixed offset from the top left
+/// of the window, so only the list and the pane gain room and nothing on screen
+/// moves.
 #[tauri::command]
-fn resize_quick_add_window(app: tauri::AppHandle, height: f64) -> Result<(), String> {
+fn resize_quick_add_window(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
     let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) else {
         return Err("Add word window was not found".into());
     };
 
+    // The frontend measures its own content, which can be the meaning pane as
+    // well as the list; the clamps only stop a bad measurement from escaping the
+    // screen.
+    let width = width.clamp(QUICK_ADD_WIDTH, QUICK_ADD_MAX_WIDTH);
     let height = height.clamp(QUICK_ADD_HEIGHT, QUICK_ADD_MAX_HEIGHT);
     window
-        .set_size(tauri::LogicalSize::new(QUICK_ADD_WIDTH, height))
+        .set_size(tauri::LogicalSize::new(width, height))
         .map_err(|err| format!("Failed to resize the add word window: {err}"))
 }
 
@@ -2069,6 +2227,7 @@ pub fn run() {
             get_launch_at_login,
             set_launch_at_login,
             suggest_words,
+            preview_word,
             add_vocab_word,
             refresh_vocab_word,
             resize_quick_add_window,
@@ -2445,6 +2604,55 @@ mod tests {
             .as_deref(),
             None
         );
+    }
+
+    /// The pane beside the add-word list stands in for the popup card, so a
+    /// saved word previews what is stored, translation included.
+    #[test]
+    fn a_saved_word_previews_from_the_database() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+
+        let id = save_word_tree(&conn, None, "run", WordSource::Cambridge, &sample_entries())
+            .expect("save");
+        let definition_id = definition_id_for(&conn, id, "to move using your legs");
+        store_definition_vi(&conn, definition_id, "di chuyển bằng chân").expect("store");
+
+        // The word is matched the way `vocabs.word` is, without regard to case.
+        let preview = saved_word_preview(&conn, "Run")
+            .expect("preview")
+            .expect("a saved word");
+        assert!(preview.saved);
+        assert_eq!(preview.source, "saved");
+        assert_eq!(preview.word, "Run");
+        assert_eq!(preview.definitions[0].definition, "to move using your legs");
+        assert_eq!(preview.definitions[0].part_of_speech, "verb");
+        assert_eq!(preview.definitions[0].guide_word, "MOVE QUICKLY");
+        assert_eq!(
+            preview.definition_vi.as_deref(),
+            Some("di chuyển bằng chân")
+        );
+        assert_eq!(preview.total, 3);
+
+        // A word that is not in the vocabulary is looked up instead.
+        assert!(saved_word_preview(&conn, "sprint")
+            .expect("preview")
+            .is_none());
+    }
+
+    /// The pane shows the first few definitions, and counts against the whole
+    /// entry so it can say how much is left for the popup.
+    #[test]
+    fn the_preview_flattens_the_tree_it_is_given() {
+        let preview = preview_from_entries("run".into(), sample_entries(), false, None);
+
+        assert!(!preview.saved);
+        assert_eq!(preview.source, "macos");
+        assert_eq!(preview.definitions.len(), 3);
+        assert_eq!(preview.total, 3);
+        assert_eq!(preview.definitions[2].part_of_speech, "noun");
+        assert_eq!(preview.definitions[2].definition, "an act of running");
+        assert_eq!(preview.definition_vi, None);
     }
 
     /// The column arrived after the first databases were created, so opening

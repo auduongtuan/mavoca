@@ -56,6 +56,8 @@ and `src-tauri/tauri.conf.json`.
   accelerator string such as `Cmd+Ctrl+Shift+N` and displays it as `⌃⇧⌘N`.
 - `src/components/QuickAdd.tsx` takes a single word and calls `add_vocab_word`,
   which fetches every meaning; on success the meaning popup shows the new word.
+  Typing completes the word from the system word list and previews the meaning of
+  the row under the arrow keys beside it (see Add Word Suggestions).
   It also offers completions while the word is typed (see Add Word
   Suggestions).
 - `src/types.ts` defines frontend types shared across React components.
@@ -185,13 +187,12 @@ turns it off. `SettingsPanel` repeats the default for its Reset button.
 
 ## Add Word Suggestions
 
-The add-word field completes what is being typed. A word that is already saved
-is worth nothing here — the window exists to add a new one — so the candidate
-list comes from `/usr/share/dict/words`, the list macOS uses for Look Up and
-spell checking.
+The add-word field completes what is being typed, and the row under the arrow
+keys shows its meaning beside the list. Candidates come from the saved words and
+from `/usr/share/dict/words`, the list macOS uses for Look Up and spell checking.
 
-- `suggest_words` returns saved words first, flagged `saved`, which doubles as
-  a duplicate warning; the system list fills the rest. Both are prefix matches,
+- `suggest_words` returns saved words first, flagged `saved`, which doubles as a
+  duplicate warning; the system list fills the rest. Both are prefix matches,
   and the shortest comes first, since the word closest to what was typed is the
   likeliest one. Everything is capped at `MAX_SUGGESTIONS` (6).
 - `completion.rs` reads the whole file once, folds it to lowercase, drops
@@ -214,6 +215,35 @@ spell checking.
   chosen adds the word, Tab completes, Esc closes the list and only closes the
   window when the list is already closed. Clicking a row takes it, and
   `preventDefault` on `mousedown` is what keeps the focus in the field.
+- The list is Base UI's `Autocomplete`, in `inline` mode with `filter={null}`:
+  Rust has already filtered against the whole system word list, and the window is
+  sized from the content it measures, so a popup that floated above the window
+  could never be measured.
+
+### Preview
+
+The word under the arrow keys shows its meaning beside the list, so the field
+never has to be given up to answer "what does this mean?".
+
+- `preview_word` answers from the saved vocabulary first, through the database, so
+  what it shows is exactly what the popup will show, translation included. If the
+  word is not saved it asks the macOS (Oxford) dictionary, which is local and
+  instant.
+- It never touches the network. A word Oxford does not have previews as
+  `source: "none"` and says Cambridge is tried when it is added, because
+  `add_vocab_word` still falls back to Cambridge and then the API.
+- The pane shows `PREVIEW_DEFINITIONS` (4) definitions with their guide words and
+  part of speech, and `total` behind them for "N more definitions when added".
+  `VocabCard` is where the whole tree is read.
+- The window widens while a meaning is shown: `resize_quick_add_window` takes a
+  width as well as a height and clamps it to
+  `QUICK_ADD_WIDTH..QUICK_ADD_MAX_WIDTH` (420..780). `QuickAdd.tsx` measures both
+  from `.quick-add-content`, which is `width: max-content` so it reports the room
+  the columns need rather than the width of the window, and hides the pane again
+  when nothing is highlighted, closing back to 420.
+- The meanings of a word are looked up once per opening: `QuickAdd.tsx` caches
+  them by word, and the lookup is debounced, so stepping down the list does not
+  send a request per row.
 
 ## Backup Behavior
 
