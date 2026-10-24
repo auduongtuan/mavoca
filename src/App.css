@@ -167,7 +167,7 @@ html, body {
   flex-wrap: wrap;
   gap: 8px;
   margin: 0;
-  color: #787774;
+  color: #6b6a67;
   font-size: 12px;
   font-weight: 600;
 }
@@ -181,7 +181,7 @@ html, body {
 /* The accent only earns a label when the card carries both, which is the one
    case where two of these sit side by side. */
 .pronunciation-accent {
-  color: rgba(55, 53, 47, 0.42);
+  color: rgba(55, 53, 47, 0.65);
   font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
@@ -204,7 +204,7 @@ html, body {
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: rgba(55, 53, 47, 0.42);
+  color: rgba(55, 53, 47, 0.65);
   cursor: pointer;
 }
 
@@ -265,7 +265,7 @@ html, body {
 }
 
 .card-position {
-  color: rgba(55, 53, 47, 0.5);
+  color: rgba(55, 53, 47, 0.65);
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -383,7 +383,7 @@ html, body {
   gap: 6px;
   font-size: 10px;
   font-weight: 600;
-  color: #787774;
+  color: #6b6a67;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -391,7 +391,7 @@ html, body {
 /* Which entry the senses came from. Not uppercased: it is Vietnamese, and the
    part of speech is shown as the dictionary writes it. */
 .dictionary-source {
-  color: rgba(55, 53, 47, 0.45);
+  color: rgba(55, 53, 47, 0.65);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0;
@@ -450,7 +450,7 @@ html, body {
   padding: 0;
   border: none;
   background: none;
-  color: rgba(55, 53, 47, 0.5);
+  color: rgba(55, 53, 47, 0.65);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -1169,7 +1169,7 @@ html, body {
 }
 
 .suggestion-tag {
-  color: #9b9a97;
+  color: #6b6a67;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -1177,7 +1177,7 @@ html, body {
 }
 
 .quick-add-status {
-  color: #787774;
+  color: #6b6a67;
   font-size: 12px;
 }
 
@@ -1441,15 +1441,15 @@ html, body {
   }
 
   .word-pronunciation {
-    color: #9b9a97;
+    color: rgba(255, 255, 255, 0.85);
   }
 
   .pronunciation-accent {
-    color: rgba(255, 255, 255, 0.45);
+    color: rgba(255, 255, 255, 0.62);
   }
 
   .pronunciation-speak {
-    color: rgba(255, 255, 255, 0.45);
+    color: rgba(255, 255, 255, 0.62);
   }
 
   .pronunciation-speak:hover {
@@ -1639,6 +1639,10 @@ html, body {
     background: rgba(255, 255, 255, 0.1);
   }
 
+  .suggestion-tag {
+    color: rgba(255, 255, 255, 0.62);
+  }
+
   .shortcut-recorder {
     border-color: rgba(255, 255, 255, 0.2);
     color: #e3e2e0;
@@ -1720,7 +1724,7 @@ html, body {
   }
 
   .card-position {
-    color: rgba(227, 226, 224, 0.5);
+    color: rgba(227, 226, 224, 0.66);
   }
 
   .translate-btn,
@@ -1757,12 +1761,12 @@ html, body {
   }
 
   .vocab-card .section-label {
-    color: rgba(227, 226, 224, 0.5);
+    color: rgba(227, 226, 224, 0.66);
   }
 
   .vocab-card .dictionary-source,
   .vocab-card .sense-toggle {
-    color: rgba(227, 226, 224, 0.4);
+    color: rgba(227, 226, 224, 0.6);
   }
 
   .vocab-card .sense-toggle:hover {
