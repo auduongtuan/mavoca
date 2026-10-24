@@ -467,9 +467,15 @@ Mavoca is a menu bar extra, not an app in the Dock.
 - The popup fits its card. `usePopupAutoResize` watches the card with a
   `ResizeObserver` and calls `resize_popup`, which clamps the height between
   `POPUP_MIN_HEIGHT` and `POPUP_MAX_HEIGHT` and to the room left on screen;
-  beyond that `.app` scrolls. `.vocab-card` must keep its natural height — if it
-  sizes from the window again (`height: 100%`, `flex: 1`), the measurement feeds
-  back into itself and the window can never shrink.
+  beyond that the popup scrolls. The scroll container is Base UI's `ScrollArea`
+  in `App.tsx`, whose viewport keeps the webview's own scrollbar hidden and
+  draws a thumb over the card instead; a native bar would take a gutter and
+  reflow the text sideways the moment the card outgrew the window. `.vocab-card`
+  must keep its natural height — if it sizes from the window again
+  (`height: 100%`, `flex: 1`), the measurement feeds back into itself and the
+  window can never shrink. The 6px inset that `usePopupAutoResize` adds to the
+  card belongs to `.app-body`, the card's parent, which is where the hook reads
+  it from.
 - Auto-rotation steps to the next definition every `rotation_interval_secs`
   seconds (default `DEFAULT_ROTATION_INTERVAL_SECS`, 10; 0 turns it off),
   counting only time the popup is hidden: opening the popup resets the count,
@@ -541,7 +547,9 @@ Mavoca is a menu bar extra, not an app in the Dock.
   wraps, so the shared input rule sets each one outright. A new control that
   skips that rule renders typed text as uppercase bold 11px.
 - Do not customize scrollbars directly; rely on `color-scheme` for light/dark
-  scrollbar adaptation.
+  scrollbar adaptation. The popup is the exception, because it is sized to its
+  content: it scrolls through `ScrollArea` with an overlay thumb
+  (`.app-scrollbar`), so a bar never takes width from the card or shifts it.
 - Avoid unrelated palette churn or decorative shadows.
 
 ## Coding Conventions

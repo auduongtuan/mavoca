@@ -4,7 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 /**
  * Keeps the popup window as tall as the card. The card has its natural height
  * (it does not fill the window), so measuring it cannot feed back into itself.
- * Rust clamps the result to the screen; past that, `.app` scrolls.
+ * Rust clamps the result to the screen; past that, the popup's scroll area
+ * scrolls.
  */
 export const usePopupAutoResize = (cardRef: RefObject<HTMLElement | null>) => {
   useLayoutEffect(() => {

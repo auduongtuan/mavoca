@@ -33,11 +33,49 @@ html, body {
 
 .app {
   height: 100vh;
-  display: flex;
-  flex-direction: column;
-  padding: 6px;
-  overflow-y: auto;
+  overflow: hidden;
   background: transparent;
+}
+
+.app-scroll-area {
+  height: 100%;
+}
+
+.app-viewport {
+  height: 100%;
+}
+
+/* The card's inset. `usePopupAutoResize` reads this padding off the card's
+   parent, so it stays here rather than on `.app`. */
+.app-body {
+  padding: 6px;
+}
+
+/* The popup draws its own scrollbar over the card instead of letting the
+   webview take a gutter for one: a native bar appearing when the card outgrows
+   the window would reflow the text sideways. Base UI's viewport keeps the
+   native bar hidden. */
+.app-scrollbar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  right: 2px;
+  display: flex;
+  justify-content: center;
+  width: 10px;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.app-scrollbar[data-scrolling],
+.app-scrollbar[data-hovering] {
+  opacity: 1;
+}
+
+.app-scrollbar-thumb {
+  width: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.22);
 }
 
 /* Vocab Card - Using Native Vibrancy (No Extra Styling) */
@@ -1357,6 +1395,10 @@ html, body {
     color: #e3e2e0;
     border: none;
     box-shadow: none;
+  }
+
+  .app-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.28);
   }
 
   .word {

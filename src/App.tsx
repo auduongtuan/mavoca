@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { ScrollArea } from '@base-ui/react/scroll-area';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useVocab } from './hooks/useVocab';
 import { VocabCard } from './components/VocabCard';
@@ -34,18 +35,30 @@ function LearningApp() {
     return <ErrorState message="No vocabulary words found" onRetry={reload} />;
   }
 
+  // The card is taller than the window only when it has more to show than the
+  // screen allows. The scroll area draws its own overlay bar, so that case costs
+  // the card no width and the text cannot shift when the bar comes and goes.
   return (
     <main className="app">
-      <VocabCard
-        key={`${card.vocabId}-${card.position}`}
-        card={card}
-        onNext={getNextWord}
-        onPrevious={getPreviousWord}
-        onNextMeaning={getNextMeaning}
-        onPreviousMeaning={getPreviousMeaning}
-        onRandom={getRandomWord}
-        onManage={() => invoke('show_manager_window')}
-      />
+      <ScrollArea.Root className="app-scroll-area">
+        <ScrollArea.Viewport className="app-viewport">
+          <div className="app-body">
+            <VocabCard
+              key={`${card.vocabId}-${card.position}`}
+              card={card}
+              onNext={getNextWord}
+              onPrevious={getPreviousWord}
+              onNextMeaning={getNextMeaning}
+              onPreviousMeaning={getPreviousMeaning}
+              onRandom={getRandomWord}
+              onManage={() => invoke('show_manager_window')}
+            />
+          </div>
+        </ScrollArea.Viewport>
+        <ScrollArea.Scrollbar className="app-scrollbar" orientation="vertical">
+          <ScrollArea.Thumb className="app-scrollbar-thumb" />
+        </ScrollArea.Scrollbar>
+      </ScrollArea.Root>
     </main>
   );
 }
