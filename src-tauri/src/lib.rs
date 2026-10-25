@@ -1612,6 +1612,10 @@ struct WordPreview {
     /// The stored Vietnamese translation of the first definition, when there is
     /// one; only a saved word has any.
     definition_vi: Option<String>,
+    /// Lạc Việt's entry for the word, read the way the popup reads it but with
+    /// nothing to rank against: a preview has no translation, so the senses keep
+    /// Lạc Việt's own order and `ranked` is always false.
+    lac_viet: Option<vietnamese::LacVietMeaning>,
 }
 
 /// The meaning of a suggestion, for the pane beside the add-word list.
@@ -1621,6 +1625,10 @@ struct WordPreview {
 /// is fetched the way `add_vocab_word` fetches it, the installed dictionary
 /// first and Cambridge after, so the pane answers for the words Oxford lacks
 /// too. Nothing is written: a preview must not change the vocabulary.
+///
+/// Both halves come back together. Lạc Việt is asked whether or not the English
+/// sources answer, because for a word it knows and they do not it is the only
+/// thing that can say what the word means.
 ///
 /// Async and moved to a worker for the same reason as `lac_viet_meaning`: the
 /// dictionary bridge finishes its work on the main queue.
@@ -1638,30 +1646,47 @@ async fn preview_word(
         let conn = state.db.lock().unwrap();
         saved_word_preview(&conn, &word)?
     };
-    if let Some(preview) = saved {
-        return Ok(preview);
-    }
 
     let lookup = word.clone();
-    let fetched = tauri::async_runtime::spawn_blocking(move || dictionary::fetch_word(&lookup))
-        .await
-        .map_err(|err| format!("Dictionary task failed: {err}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut preview = match saved {
+            Some(preview) => preview,
+            None => match dictionary::fetch_word(&lookup) {
+                Ok(fetched) => preview_from_entries(
+                    lookup,
+                    fetched.entries,
+                    false,
+                    None,
+                    fetched.source.as_str(),
+                ),
+                // A word none of the sources carries is not an error here
+                // either: the pane says so, and adding it reports the failure
+                // in the field's own status line.
+                Err(_) => WordPreview {
+                    word: lookup,
+                    saved: false,
+                    source: "none".into(),
+                    definitions: Vec::new(),
+                    total: 0,
+                    definition_vi: None,
+                    lac_viet: None,
+                },
+            },
+        };
 
-    // A word none of the sources carries is not an error here either: the pane
-    // says so, and adding it reports the failure in the field's own status line.
-    Ok(match fetched {
-        Ok(fetched) => {
-            preview_from_entries(word, fetched.entries, false, None, fetched.source.as_str())
-        }
-        Err(_) => WordPreview {
-            word,
-            saved: false,
-            source: "none".into(),
-            definitions: Vec::new(),
-            total: 0,
-            definition_vi: None,
-        },
+        // The part of speech narrows Lạc Việt's entry to the senses that belong
+        // to it; a word the English sources missed has none to offer, and every
+        // group is shown instead of none.
+        let part_of_speech = preview
+            .definitions
+            .first()
+            .map(|definition| definition.part_of_speech.clone())
+            .unwrap_or_default();
+        preview.lac_viet = vietnamese::lac_viet_meaning(&preview.word, &part_of_speech, None);
+        preview
     })
+    .await
+    .map_err(|err| format!("Dictionary task failed: {err}"))
 }
 
 fn saved_word_preview(conn: &Connection, word: &str) -> Result<Option<WordPreview>, String> {
@@ -1729,6 +1754,8 @@ fn preview_from_entries(
         definitions,
         total: count_definitions(&entries),
         definition_vi,
+        // Filled in by `preview_word`, which is where the Lạc Việt bridge runs.
+        lac_viet: None,
     }
 }
 

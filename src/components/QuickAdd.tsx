@@ -9,6 +9,8 @@ import { PreviewDefinition, VocabWord, WordPreview, WordSuggestion } from '../ty
 const SUGGEST_DEBOUNCE_MS = 180;
 /** The pane follows the arrow keys, so its lookup waits for a moment's rest. */
 const PREVIEW_DEBOUNCE_MS = 120;
+/** Senses shown before the count takes over; the pane resizes with the window. */
+const PREVIEW_SENSES = 3;
 /** Below two letters every list is noise. */
 const MIN_PREFIX_LEN = 2;
 
@@ -255,6 +257,12 @@ export const QuickAdd: React.FC = () => {
     current.definitions.every(
       (definition) => definition.partOfSpeech === current.definitions[0].partOfSpeech,
     );
+  // The pane is a quick lookup, so it answers in Vietnamese as well: Lạc Việt
+  // has most words, and where it does not, a saved word still has the stored
+  // translation of the definition above it.
+  const lacViet = current?.lacViet ?? null;
+  const senses = (lacViet?.senses ?? []).slice(0, PREVIEW_SENSES);
+  const hiddenSenses = (lacViet?.senses.length ?? 0) - senses.length;
 
   return (
     <main className="quick-add" ref={mainRef}>
@@ -363,13 +371,37 @@ export const QuickAdd: React.FC = () => {
                       {current.total - current.definitions.length} more definitions when added.
                     </p>
                   )}
-                  {current.definitionVi && (
-                    <p className="preview-vi">
+                </>
+              )}
+              {current && (senses.length > 0 || current.definitionVi) && (
+                <div className="preview-vi">
+                  {senses.length > 0 ? (
+                    <>
+                      <span className="preview-vi-label">
+                        Lạc Việt
+                        {lacViet?.partOfSpeechLabel ? ` · ${lacViet.partOfSpeechLabel}` : ''}
+                      </span>
+                      {/* No sense is marked: the pane has no translation to rank
+                          them against, so the order is Lạc Việt's own. */}
+                      <ul className="sense-list">
+                        {senses.map((sense, index) => (
+                          <li className="sense" key={`${index}-${sense.headline}`}>
+                            <strong>{sense.headline}</strong>
+                            {sense.explanation && ` ${sense.explanation}`}
+                          </li>
+                        ))}
+                      </ul>
+                      {hiddenSenses > 0 && (
+                        <p className="preview-note">+{hiddenSenses} more</p>
+                      )}
+                    </>
+                  ) : (
+                    <>
                       <span className="preview-vi-label">Tiếng Việt</span>
                       {current.definitionVi}
-                    </p>
+                    </>
                   )}
-                </>
+                </div>
               )}
             </aside>
           )}

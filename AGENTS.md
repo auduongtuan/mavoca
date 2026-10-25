@@ -247,6 +247,22 @@ has to be given up to answer "what does this mean?".
 - The pane shows `PREVIEW_DEFINITIONS` (4) definitions with their guide words and
   part of speech, and `total` behind them for "N more definitions when added".
   `VocabCard` is where the whole tree is read.
+- It answers in Vietnamese too, because that is what a quick lookup is for: the
+  same `vietnamese::lac_viet_meaning` the popup uses, under a `Lạc Việt · danh từ`
+  label, three senses and a `+N more` count (`PREVIEW_SENSES`). The part of speech
+  comes from the first previewed definition, and a word the English sources
+  missed — `source: "none"` — passes none, so every Lạc Việt group is offered
+  rather than none. That is often the only thing the pane can say about such a
+  word, and why the section renders outside the English one.
+- Nothing is ranked and no sense is marked: the preview has no translation of its
+  own definition, so the order is Lạc Việt's own and `ranked` is always false. A
+  saved word it does not carry falls back to the stored `definitionVi`, which is
+  the one thing there that belongs to the definition above it.
+- Lạc Việt is read in the same `spawn_blocking` as the fetch, so the pane still
+  arrives in one round trip; it is a local dictionary read and adds nothing
+  measurable to the online path. `.quick-add-preview` scrolls past
+  `QUICK_ADD_MAX_HEIGHT` instead of letting a long entry lose its last sense off
+  the bottom of the window.
 - The window widens while a meaning is shown: `resize_quick_add_window` takes a
   width as well as a height and clamps it to
   `QUICK_ADD_WIDTH..QUICK_ADD_MAX_WIDTH` (420..780). `QuickAdd.tsx` measures both

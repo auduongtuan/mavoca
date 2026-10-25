@@ -1211,6 +1211,12 @@ html, body {
   padding-left: 18px;
   border-left: 1px solid rgba(0, 0, 0, 0.09);
   color: #37352f;
+  /* The window stops growing at `QUICK_ADD_MAX_HEIGHT`, so a word with long
+     definitions and a Lạc Việt entry scrolls here instead of losing its last
+     sense off the bottom. The cap is the padding box, which keeps the measured
+     content height stable once the window is at that height. */
+  max-height: calc(100vh - 40px);
+  overflow: hidden auto;
 }
 
 .preview-head {
@@ -1292,6 +1298,11 @@ html, body {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+/* The same senses the popup shows, under the English definitions they belong to. */
+.preview-vi .sense-list {
+  margin-top: 5px;
 }
 
 .editor-actions {
@@ -1768,6 +1779,14 @@ html, body {
 
   .preview-vi {
     border-top-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .quick-add-preview .sense {
+    color: rgba(227, 226, 224, 0.72);
+  }
+
+  .quick-add-preview .sense strong {
+    color: #e3e2e0;
   }
 
   .suggestion-tag {

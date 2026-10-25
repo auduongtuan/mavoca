@@ -117,4 +117,10 @@ export interface WordPreview {
   total: number;
   /** The stored Vietnamese translation of the first definition, if any. */
   definitionVi: string | null;
+  /**
+   * Lạc Việt's entry for the word, or null when it does not have it. The pane
+   * has no translation to rank the senses against, so `ranked` is always false
+   * here and no sense is marked as the closest.
+   */
+  lacViet: LacVietMeaning | null;
 }
