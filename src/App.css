@@ -181,7 +181,7 @@ html, body {
 /* The accent only earns a label when the card carries both, which is the one
    case where two of these sit side by side. */
 .pronunciation-accent {
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
@@ -204,7 +204,7 @@ html, body {
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   cursor: pointer;
 }
 
@@ -243,7 +243,11 @@ html, body {
 .category[data-pos='idiom'] { --pos-color: #8a6a3a; }
 
 .vocab-card .category[data-pos] {
-  color: var(--pos-color, rgba(255, 255, 255, 0.9));
+  /* The hue identifies the part of speech, but its text still has to be read:
+     several hues on their own tint sat at 3.4-4.3:1. Mixed toward the ink here
+     and toward white in dark mode, every hue clears 4.5:1 without losing its
+     colour. */
+  color: color-mix(in srgb, var(--pos-color, #7c7a75) 72%, #37352f);
   background: color-mix(in srgb, var(--pos-color, transparent) 16%, transparent);
   border-color: color-mix(in srgb, var(--pos-color, transparent) 45%, transparent);
 }
@@ -257,7 +261,7 @@ html, body {
 }
 
 .guide-word {
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -265,7 +269,7 @@ html, body {
 }
 
 .card-position {
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -348,7 +352,7 @@ html, body {
 
 .vocab-card .translation-status {
   margin-top: 4px;
-  color: rgba(55, 53, 47, 0.5);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 12px;
 }
 
@@ -391,7 +395,7 @@ html, body {
 /* Which entry the senses came from. Not uppercased: it is Vietnamese, and the
    part of speech is shown as the dictionary writes it. */
 .dictionary-source {
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0;
@@ -450,7 +454,7 @@ html, body {
   padding: 0;
   border: none;
   background: none;
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -1537,6 +1541,12 @@ html, body {
   .category[data-pos='phrase'],
   .category[data-pos='idiom'] { --pos-color: #d6b47f; }
 
+  /* Same 4.5:1 floor as light mode, from the other side: the hues in dark mode
+     are already pale, so they only need a little white mixed in. */
+  .vocab-card .category[data-pos] {
+    color: color-mix(in srgb, var(--pos-color, #b9b8b5) 85%, #ffffff);
+  }
+
   .meaning p {
     color: #e3e2e0;
   }
@@ -1900,7 +1910,7 @@ html, body {
   }
 
   .vocab-card .translation-status {
-    color: rgba(227, 226, 224, 0.5);
+    color: rgba(227, 226, 224, 0.62);
   }
 
   .vocab-card .translation-status.error {

@@ -585,6 +585,14 @@ Mavoca is a menu bar extra, not an app in the Dock.
   translated definition ranked it there — do not present a sense as *the*
   translation, because it is not one.
 - Primary buttons should use a solid background.
+- Muted text is measured, not guessed. Labels and metadata in the popup and the
+  add-word window sit at 4.5:1 or better against the vibrancy backdrop, which is
+  `0.7` ink in light mode and `0.6`-`0.66` white in dark; the card's `1 of 3`
+  counter, its guide word, its `+N more` toggle, the dictionary source and the
+  translation status are all in that group. The part-of-speech badges mix their
+  hue toward the ink in light mode (72%) and toward white in dark (85%), because
+  as text on their own 16% tint several hues sat at 3.4-4.3:1. Keep the
+  hierarchy in size, weight and case instead of dropping below that floor.
 - Never use `window.confirm`, `alert`, or `prompt`. The macOS webview does
   not implement them: `confirm` returns false without showing anything, so the
   action silently never happens. Use `ConfirmDialog` in `src/components/ui/`,
