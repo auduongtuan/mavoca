@@ -946,6 +946,7 @@ fn update_tray_title(app: &tauri::AppHandle, word: &str) {
         let title = if word.is_empty() { None } else { Some(word) };
         let _ = tray.set_title(title);
     }
+    follow_tray_item(app);
 }
 
 #[cfg(target_os = "macos")]
@@ -2154,6 +2155,38 @@ fn position_popup_under_tray(window: &tauri::WebviewWindow) -> bool {
     let scale_factor = monitor.scale_factor();
     position_popup_at_click(window, center_x * scale_factor, top * scale_factor).is_ok()
 }
+
+/// Keeps an open popup under the menu bar item after the title changed.
+///
+/// The title is the current word, so the item is exactly as wide as that word
+/// and its centre moves with it: stepping from `amenity` to `mellifluous` walks
+/// the popup's anchor left, and a popup left where the previous word put it sits
+/// visibly off its own menu bar item. Nothing else moves it — the popup is only
+/// anchored when it is shown — so the title change is what re-anchors it.
+#[cfg(target_os = "macos")]
+fn follow_tray_item(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    // A hidden popup is anchored again when it is shown, and the rotation keeps
+    // changing the title behind the user's back.
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+
+    let app = app.clone();
+    // Posted rather than run inline: this can be called from the rotation
+    // thread, and the item's frame is only readable on the main thread. Posting
+    // also lets the item lay itself out at the new title's width first.
+    let _ = app.clone().run_on_main_thread(move || {
+        if let Some(window) = app.get_webview_window("main") {
+            position_popup_under_tray(&window);
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn follow_tray_item(_app: &tauri::AppHandle) {}
 
 fn position_popup_at_click(
     window: &tauri::WebviewWindow,

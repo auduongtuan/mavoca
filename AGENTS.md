@@ -503,6 +503,15 @@ Mavoca is a menu bar extra, not an app in the Dock.
   reason. Note that a position set from the main thread is applied by the event
   loop after the command returns: reading `outer_position` in the same breath
   shows the stale one, which is not a positioning failure.
+- The item is exactly as wide as the title, so the anchor moves every time the
+  title does: stepping from `amenity` to `mellifluous` walks the item's centre
+  left and a popup left where the previous word put it sits off its own item.
+  `update_tray_title` therefore ends with `follow_tray_item`, which re-anchors a
+  popup that is already open through the same `position_popup_under_tray`. It is
+  posted to the main queue rather than run inline — the rotation thread changes
+  the title too, and posting lets the item lay itself out at the new width
+  first — and it does nothing while the popup is hidden, which is re-anchored
+  when it is shown.
 - The popup fits its card. `usePopupAutoResize` watches the card with a
   `ResizeObserver` and calls `resize_popup`, which clamps the height between
   `POPUP_MIN_HEIGHT` and `POPUP_MAX_HEIGHT` and to the room left on screen;
