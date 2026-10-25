@@ -522,12 +522,19 @@ Mavoca is a menu bar extra, not an app in the Dock.
   `ROTATION_TICK` and reads the interval from `AppState`, so a change in
   Settings applies without a restart.
 - The rotation unit is a single definition, not a word. Rust owns the flattened
-  card list in `AppState.cards`, and `current_index` indexes into it. Prev/Next
-  walk every definition of a word before moving to the next word. The ‹ ›
-  buttons beside the popup's `1 of 3` counter wrap within the current word;
-  `useVocab` turns them into `step_vocab_card` deltas. They sit on the card's
-  word line, above the part of speech and the transcription, because a step
-  changes those as well as the definition text.
+  card list in `AppState.cards`, and `current_index` indexes into it. The two
+  ways of moving are separate on purpose:
+  - The ‹ › buttons beside the popup's `1 of 3` counter walk the definitions of
+    the current word and wrap within it; `useVocab` turns them into
+    `step_vocab_card` deltas. They sit on the card's word line, above the part
+    of speech and the transcription, because a step changes those as well as the
+    definition text.
+  - The footer's ← → move between words, skipping whatever is left of the
+    current word's definitions and landing on the first definition of the next
+    or previous one, wrapping at both ends. A word is a run of cards sharing a
+    `vocab_id`, so `step_vocab_word` finds the boundary in `word_step_index`
+    rather than counting positions — the card it starts from may be any of the
+    word's definitions.
 - `AppState.cards` and `AppState.current_index` are never locked at the same
   time. Keep it that way.
 

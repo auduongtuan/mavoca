@@ -417,10 +417,10 @@ export const VocabCard: React.FC<VocabCardProps> = ({
 
       <div className="controls">
         <div className="control-group">
-          <button onClick={onPrevious} className="control-btn" title="Previous" aria-label="Previous">
+          <button onClick={onPrevious} className="control-btn" title="Previous word" aria-label="Previous word">
             <ArrowLeft size={15} weight="bold" aria-hidden />
           </button>
-          <button onClick={onNext} className="control-btn" title="Next" aria-label="Next">
+          <button onClick={onNext} className="control-btn" title="Next word" aria-label="Next word">
             <ArrowRight size={15} weight="bold" aria-hidden />
           </button>
         </div>

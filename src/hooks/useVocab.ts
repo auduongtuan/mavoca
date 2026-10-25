@@ -61,11 +61,24 @@ export const useVocab = () => {
     }
   }, []);
 
-  const getNextWord = useCallback(() => void step(1), [step]);
-  const getPreviousWord = useCallback(() => void step(-1), [step]);
+  // The footer's arrows move between words, skipping the rest of the current
+  // word's definitions. Rust finds the word boundary, because it owns the list.
+  const stepWord = useCallback(async (direction: 1 | -1) => {
+    try {
+      const next = await invoke<VocabCardData | null>('step_vocab_word', { direction });
+      if (next) {
+        setCard(next);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
 
-  // A word's definitions sit next to each other in the rotation, so moving
-  // between meanings is a step that wraps within the word instead of leaving it.
+  const getNextWord = useCallback(() => void stepWord(1), [stepWord]);
+  const getPreviousWord = useCallback(() => void stepWord(-1), [stepWord]);
+
+  // A word's definitions sit next to each other in the rotation, so the card's
+  // own stepper moves one meaning at a time and wraps within the word.
   const stepMeaning = useCallback((direction: 1 | -1) => {
     if (!card || card.total < 2) {
       return;

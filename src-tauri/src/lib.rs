@@ -1259,6 +1259,72 @@ fn step_vocab_card(
     apply_card_index(&app, &state, next)
 }
 
+/// Steps the rotation by one word, landing on the first definition of the word
+/// before or after the current one.
+///
+/// The popup's footer arrows move between words; the ‹ › stepper on the card's
+/// word line is what walks the definitions of one word (`step_vocab_card`).
+#[tauri::command]
+fn step_vocab_word(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+    direction: i32,
+) -> Option<VocabCard> {
+    // Locks are taken one at a time: nothing in this file ever holds `cards`
+    // and `current_index` together.
+    let current = *state.current_index.lock().unwrap();
+
+    let next = {
+        let cards = state.cards.lock().unwrap();
+        word_step_index(&cards, current, direction)
+    }?;
+
+    apply_card_index(&app, &state, next)
+}
+
+/// The card a word step lands on: the first definition of the word before or
+/// after the one at `current`, wrapping at both ends.
+///
+/// `build_cards` puts a word's definitions next to each other, so a word is a run
+/// of cards sharing a `vocab_id`.
+fn word_step_index(cards: &[VocabCard], current: usize, direction: i32) -> Option<usize> {
+    if cards.is_empty() {
+        return None;
+    }
+    let current = current.min(cards.len() - 1);
+    let word = cards[current].vocab_id;
+
+    if direction >= 0 {
+        let mut end = current;
+        while end < cards.len() && cards[end].vocab_id == word {
+            end += 1;
+        }
+        // Wrapping past the last word means the first card of the rotation.
+        return Some(end % cards.len());
+    }
+
+    let mut start = current;
+    while start > 0 && cards[start - 1].vocab_id == word {
+        start -= 1;
+    }
+    if start == 0 {
+        // Back from the first word lands on the start of the last one.
+        let last_word = cards[cards.len() - 1].vocab_id;
+        let mut last = cards.len() - 1;
+        while last > 0 && cards[last - 1].vocab_id == last_word {
+            last -= 1;
+        }
+        return Some(last);
+    }
+
+    let previous_word = cards[start - 1].vocab_id;
+    let mut previous = start - 1;
+    while previous > 0 && cards[previous - 1].vocab_id == previous_word {
+        previous -= 1;
+    }
+    Some(previous)
+}
+
 #[tauri::command]
 fn random_vocab_card(state: tauri::State<AppState>, app: tauri::AppHandle) -> Option<VocabCard> {
     let len = state.cards.lock().unwrap().len();
@@ -2220,6 +2286,7 @@ pub fn run() {
             list_vocab_words,
             get_current_vocab_card,
             step_vocab_card,
+            step_vocab_word,
             random_vocab_card,
             set_current_vocab_id,
             get_settings,
@@ -2888,6 +2955,57 @@ mod tests {
             })
             .expect("count");
         assert_eq!(orphans, 0);
+    }
+
+    /// The footer's arrows move between words: a word step skips the rest of the
+    /// current word's definitions instead of walking into the next one.
+    #[test]
+    fn a_word_step_lands_on_the_next_word() {
+        let cards = vec![
+            card(1, "apple", 1, 1),
+            card(2, "run", 1, 3),
+            card(2, "run", 2, 3),
+            card(2, "run", 3, 3),
+            card(3, "walk", 1, 2),
+            card(3, "walk", 2, 2),
+        ];
+
+        // Forward from anywhere in a word lands on the first card of the next.
+        assert_eq!(word_step_index(&cards, 0, 1), Some(1));
+        assert_eq!(word_step_index(&cards, 1, 1), Some(4));
+        assert_eq!(word_step_index(&cards, 2, 1), Some(4));
+        assert_eq!(word_step_index(&cards, 3, 1), Some(4));
+        // Past the last word it wraps to the first card of the rotation.
+        assert_eq!(word_step_index(&cards, 4, 1), Some(0));
+        assert_eq!(word_step_index(&cards, 5, 1), Some(0));
+
+        // Backwards lands on the first card of the previous word, not on the
+        // first definition of this one: that is the card's own stepper.
+        assert_eq!(word_step_index(&cards, 5, -1), Some(1));
+        assert_eq!(word_step_index(&cards, 4, -1), Some(1));
+        assert_eq!(word_step_index(&cards, 3, -1), Some(0));
+        assert_eq!(word_step_index(&cards, 1, -1), Some(0));
+        // Back from the first word wraps to the start of the last one.
+        assert_eq!(word_step_index(&cards, 0, -1), Some(4));
+
+        assert_eq!(word_step_index(&[], 0, 1), None);
+    }
+
+    fn card(vocab_id: i64, word: &str, position: usize, total: usize) -> VocabCard {
+        VocabCard {
+            vocab_id,
+            definition_id: 0,
+            word: word.into(),
+            source: WordSource::Manual,
+            part_of_speech: "noun".into(),
+            pron_uk: String::new(),
+            pron_us: String::new(),
+            guide_word: String::new(),
+            definition: format!("sense {position} of {word}"),
+            examples: vec![],
+            position,
+            total,
+        }
     }
 
     /// Rotation walks every definition of a word before moving to the next.
