@@ -1122,13 +1122,13 @@ html, body {
      the window. Scrolling the window then loses nothing, and macOS draws the
      scrollbar only while scrolling, so nothing appears in the usual case. */
   overflow: hidden auto;
-  /* The window is `NSVisualEffectMaterial::Popover`, which takes its colour from
-     whatever is behind it: over a bright document in dark mode the panel measured
-     a mid grey, where no text can reach 4.5:1 — pure white stopped at 4.1:1 and
-     the muted grey managed 1.4:1. A near-opaque tint keeps the blur as a hint and
-     gives the text a backdrop that can be measured: worst case (a black document
-     in light mode, a white one in dark mode) every token below clears 5:1. */
-  background: rgba(250, 249, 247, 0.9);
+  /* Left transparent on purpose: the window is `NSVisualEffectMaterial::Popover`,
+     so the panel is the system blur over whatever is behind it, the same surface
+     the popup card sits on. A tint here would buy measurable contrast and lose
+     the blur, so the contrast is the text's job instead — see the tokens below,
+     which are a step stronger than the card's because this window sits over
+     documents rather than over the menu bar. */
+  background: transparent;
 }
 
 /* Measured by `QuickAdd.tsx` to size the window to its content, so it is as wide
@@ -1169,9 +1169,10 @@ html, body {
 
 /* WebKit's own placeholder is a fixed grey, which is invisible on the dark panel
    and loud on the light one. This is the first thing the window says, so it is
-   set here rather than left to the default. */
+   set here rather than left to the default — a step under the field's own ink,
+   and never as faint as the default was. */
 .quick-add-input::placeholder {
-  color: rgba(55, 53, 47, 0.7);
+  color: rgba(55, 53, 47, 0.75);
 }
 
 .suggestions {
@@ -1326,7 +1327,8 @@ html, body {
 }
 
 /* The popup's guide words are read against a card over the menu bar's vibrancy;
-   this pane has its own tint under them, so they can be a step stronger. */
+   this pane sits over a document, where the backdrop is brighter or darker than
+   the menu bar's, so its muted text is a step stronger than the card's. */
 .quick-add-preview .guide-word {
   color: rgba(55, 53, 47, 0.8);
 }
@@ -1767,15 +1769,12 @@ html, body {
   }
 
   /* The add-word window's own tokens, kept out of the group above: it is the one
-     surface that sits over a translucent panel, so its muted text is white at a
-     measured alpha rather than a fixed grey. See `.quick-add`. */
+     surface with no tint of its own over the system blur, so its muted text is
+     white at a measured alpha rather than a fixed grey, one step stronger than
+     the card's `0.66`. See `.quick-add`. */
   .quick-add-field,
   .quick-add-status {
-    color: rgba(255, 255, 255, 0.62);
-  }
-
-  .quick-add {
-    background: rgba(28, 28, 30, 0.9);
+    color: rgba(255, 255, 255, 0.85);
   }
 
   .confirm-backdrop {
@@ -1798,7 +1797,7 @@ html, body {
   }
 
   .quick-add-input::placeholder {
-    color: rgba(255, 255, 255, 0.55);
+    color: rgba(255, 255, 255, 0.75);
   }
 
   .suggestion {
@@ -1818,7 +1817,7 @@ html, body {
   .preview-pos,
   .preview-note,
   .preview-vi-label {
-    color: rgba(255, 255, 255, 0.62);
+    color: rgba(255, 255, 255, 0.85);
   }
 
   .preview-vi {
@@ -1834,7 +1833,7 @@ html, body {
   }
 
   .suggestion-tag {
-    color: rgba(255, 255, 255, 0.62);
+    color: rgba(255, 255, 255, 0.85);
   }
 
   .shortcut-recorder {

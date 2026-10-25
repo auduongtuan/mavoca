@@ -656,23 +656,21 @@ Mavoca is a menu bar extra, not an app in the Dock.
   (16% → 10%) only reached 3.67:1, so the text is the lever, not the background.
   Keep the hierarchy in size, weight and case instead of dropping below that
   floor.
-- The add-word window is the one surface that cannot be measured that way, so it
-  does not rely on the vibrancy at all. It is `NSVisualEffectMaterial::Popover`,
-  which takes its colour from whatever is behind it, and over a bright document
-  in dark mode the status line measured **1.28:1**; pure white stopped at 4.1:1,
-  so no text colour could have fixed it. `.quick-add` therefore paints
-  `rgba(250, 249, 247, 0.9)` in light mode and `rgba(28, 28, 30, 0.9)` in dark:
-  the blur stays as a hint, and the text gets a surface whose worst case (a black
-  document in light mode, a white one in dark) every muted token clears 5:1
-  against. Its tokens are `rgba(55, 53, 47, 0.8)` light and white at `0.62` dark
-  — `.quick-add-field`, `.quick-add-status`, `.suggestion-tag`, the preview's
-  `-meta`, `-pos`, `-note`, `-vi-label`, guide words and senses — and they stay
-  out of the manager's fixed-grey group for that reason. Do not lower the tint
-  without re-measuring.
-- The placeholder is styled explicitly (`.quick-add-input::placeholder`, `0.7`
-  ink light and `0.55` white dark). WebKit's own placeholder is a fixed grey: it
-  is invisible on the dark panel, loud on the light one, and it is the first
-  thing the window says.
+- The add-word window keeps the system blur: `.quick-add` is transparent, so the
+  panel is `NSVisualEffectMaterial::Popover` over whatever is behind it, the
+  surface the popup card sits on. Its contrast is the text's job, which is why
+  its tokens are a step stronger than the card's: `0.8` ink in light mode and
+  white at `0.85` in dark, for the icon, the status line, the `saved` tags, the
+  preview's `-meta`, `-pos`, `-note` and `-vi-label`, and the guide words. Do not
+  put a tint back on the panel to buy contrast: a `0.9` tint was there once and
+  it did reach 5:1, at the cost of the frost the window exists for. Know the
+  limit instead — in dark mode over a bright document the blur settles at a mid
+  grey (`128,128,127` measured), where white at `0.85` is 3.4:1 and even pure
+  white only reaches 4.5:1, so that panel cannot meet the floor by text alone.
+  Light mode over the same page is a light frost and clears it (5.6:1).
+- The placeholder is styled too (`.quick-add-input::placeholder`, `0.75` in both
+  themes). WebKit's own placeholder is a fixed grey: it is invisible on the dark
+  panel and loud on the light one, and it is the first thing the window says.
 - The add-word window is sized from the meaning pane, never from the list, and
   every cap on it is a fixed number of pixels, never `calc(100vh - …)`: a
   viewport-sized cap measures against the window as it is now, so the content
