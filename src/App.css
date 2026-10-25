@@ -1122,7 +1122,13 @@ html, body {
      the window. Scrolling the window then loses nothing, and macOS draws the
      scrollbar only while scrolling, so nothing appears in the usual case. */
   overflow: hidden auto;
-  background: transparent;
+  /* The window is `NSVisualEffectMaterial::Popover`, which takes its colour from
+     whatever is behind it: over a bright document in dark mode the panel measured
+     a mid grey, where no text can reach 4.5:1 — pure white stopped at 4.1:1 and
+     the muted grey managed 1.4:1. A near-opaque tint keeps the blur as a hint and
+     gives the text a backdrop that can be measured: worst case (a black document
+     in light mode, a white one in dark mode) every token below clears 5:1. */
+  background: rgba(250, 249, 247, 0.9);
 }
 
 /* Measured by `QuickAdd.tsx` to size the window to its content, so it is as wide
@@ -1147,7 +1153,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #787774;
+  color: rgba(55, 53, 47, 0.8);
 }
 
 .quick-add-input {
@@ -1159,6 +1165,13 @@ html, body {
   color: #37352f;
   font-size: 22px;
   font-weight: 600;
+}
+
+/* WebKit's own placeholder is a fixed grey, which is invisible on the dark panel
+   and loud on the light one. This is the first thing the window says, so it is
+   set here rather than left to the default. */
+.quick-add-input::placeholder {
+  color: rgba(55, 53, 47, 0.7);
 }
 
 .suggestions {
@@ -1190,7 +1203,7 @@ html, body {
 }
 
 .suggestion-tag {
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -1198,7 +1211,7 @@ html, body {
 }
 
 .quick-add-status {
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 12px;
 }
 
@@ -1245,12 +1258,12 @@ html, body {
   align-items: baseline;
   gap: 8px;
   margin-top: 1px;
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 12px;
 }
 
 .preview-pos {
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-style: italic;
 }
 
@@ -1284,7 +1297,7 @@ html, body {
 
 .preview-note {
   margin-top: 8px;
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -1300,7 +1313,7 @@ html, body {
 }
 
 .preview-vi-label {
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -1310,6 +1323,16 @@ html, body {
 /* The same senses the popup shows, under the English definitions they belong to. */
 .preview-vi .sense-list {
   margin-top: 5px;
+}
+
+/* The popup's guide words are read against a card over the menu bar's vibrancy;
+   this pane has its own tint under them, so they can be a step stronger. */
+.quick-add-preview .guide-word {
+  color: rgba(55, 53, 47, 0.8);
+}
+
+.quick-add-preview .sense {
+  color: rgba(55, 53, 47, 0.8);
 }
 
 .editor-actions {
@@ -1739,10 +1762,20 @@ html, body {
   .settings-toggle small,
   .settings-field label,
   .settings-field p,
-  .form-grid label,
+  .form-grid label {
+    color: #9b9a97;
+  }
+
+  /* The add-word window's own tokens, kept out of the group above: it is the one
+     surface that sits over a translucent panel, so its muted text is white at a
+     measured alpha rather than a fixed grey. See `.quick-add`. */
   .quick-add-field,
   .quick-add-status {
-    color: #9b9a97;
+    color: rgba(255, 255, 255, 0.62);
+  }
+
+  .quick-add {
+    background: rgba(28, 28, 30, 0.9);
   }
 
   .confirm-backdrop {
@@ -1762,6 +1795,10 @@ html, body {
   .settings-field code,
   .quick-add-input {
     color: #e3e2e0;
+  }
+
+  .quick-add-input::placeholder {
+    color: rgba(255, 255, 255, 0.55);
   }
 
   .suggestion {
