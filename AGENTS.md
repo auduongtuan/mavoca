@@ -303,6 +303,17 @@ has to be given up to answer "what does this mean?".
   from `.quick-add-content`, which is `width: max-content` so it reports the room
   the columns need rather than the width of the window, and hides the pane again
   when the list closes, back to 420.
+- The window grows to fit the meaning, not the list: `QUICK_ADD_MAX_HEIGHT` is
+  640, the room four definitions and the Lạc Việt entry under them need, and the
+  height is clamped to the room left on screen below the window's own top edge
+  (`QUICK_ADD_SCREEN_MARGIN`), the same clamp `resize_popup` makes. A screen too
+  short for that scrolls `.quick-add` rather than cutting the entry off.
+- `.quick-add-preview` caps itself at a **fixed** `max-height: 600px` — the 640
+  less the window's 40px of padding — and never at `calc(100vh - …)`. A
+  viewport-sized cap measures against the window as it is now, so the content
+  can never report itself taller than the window and the window can never grow;
+  that deadlock is why the number is fixed. The pane is what the window is sized
+  from, so a list has never been enough to size it.
 
 ## Backup Behavior
 
@@ -635,14 +646,38 @@ Mavoca is a menu bar extra, not an app in the Dock.
   translated definition ranked it there — do not present a sense as *the*
   translation, because it is not one.
 - Primary buttons should use a solid background.
-- Muted text is measured, not guessed. Labels and metadata in the popup and the
-  add-word window sit at 4.5:1 or better against the vibrancy backdrop, which is
-  `0.7` ink in light mode and `0.6`-`0.66` white in dark; the card's `1 of 3`
-  counter, its guide word, its `+N more` toggle, the dictionary source and the
-  translation status are all in that group. The part-of-speech badges mix their
-  hue toward the ink in light mode (72%) and toward white in dark (85%), because
-  as text on their own 16% tint several hues sat at 3.4-4.3:1. Keep the
-  hierarchy in size, weight and case instead of dropping below that floor.
+- Muted text is measured, not guessed. Labels and metadata in the popup sit at
+  4.5:1 or better against the vibrancy behind the card, which is `0.7` ink in
+  light mode and `0.62`-`0.66` white in dark; the card's `1 of 3` counter, its
+  guide word, its `+N more` toggle, the dictionary source and the translation
+  status are all in that group. The part-of-speech badges mix their hue toward
+  the ink in light mode (72%) and toward white in dark (85%), because as text on
+  their own 16% tint several hues sat at 3.4-4.3:1. Reducing that tint instead
+  (16% → 10%) only reached 3.67:1, so the text is the lever, not the background.
+  Keep the hierarchy in size, weight and case instead of dropping below that
+  floor.
+- The add-word window is the one surface that cannot be measured that way, so it
+  does not rely on the vibrancy at all. It is `NSVisualEffectMaterial::Popover`,
+  which takes its colour from whatever is behind it, and over a bright document
+  in dark mode the status line measured **1.28:1**; pure white stopped at 4.1:1,
+  so no text colour could have fixed it. `.quick-add` therefore paints
+  `rgba(250, 249, 247, 0.9)` in light mode and `rgba(28, 28, 30, 0.9)` in dark:
+  the blur stays as a hint, and the text gets a surface whose worst case (a black
+  document in light mode, a white one in dark) every muted token clears 5:1
+  against. Its tokens are `rgba(55, 53, 47, 0.8)` light and white at `0.62` dark
+  — `.quick-add-field`, `.quick-add-status`, `.suggestion-tag`, the preview's
+  `-meta`, `-pos`, `-note`, `-vi-label`, guide words and senses — and they stay
+  out of the manager's fixed-grey group for that reason. Do not lower the tint
+  without re-measuring.
+- The placeholder is styled explicitly (`.quick-add-input::placeholder`, `0.7`
+  ink light and `0.55` white dark). WebKit's own placeholder is a fixed grey: it
+  is invisible on the dark panel, loud on the light one, and it is the first
+  thing the window says.
+- The add-word window is sized from the meaning pane, never from the list, and
+  every cap on it is a fixed number of pixels, never `calc(100vh - …)`: a
+  viewport-sized cap measures against the window as it is now, so the content
+  can never report itself taller than the window and the window can never grow.
+  See Preview under Add Word Suggestions for the numbers.
 - Never use `window.confirm`, `alert`, or `prompt`. The macOS webview does
   not implement them: `confirm` returns false without showing anything, so the
   action silently never happens. Use `ConfirmDialog` in `src/components/ui/`,
@@ -695,8 +730,12 @@ bun run build
 ```
 
 `cargo test` covers the legacy migration, the tree round-trip through SQLite,
-the delete cascade, card flattening, and the dictionary parsers. Run it after any change
-to the schema, the tree model, or the dictionary parsing.
+the delete cascade, card flattening, the dictionary parsers, and what counts as
+one word for the selected-word fill. Run it after any change to the schema, the
+tree model, the dictionary parsing, or `selection.rs`.
 
 Use `bun run tauri dev` when behavior must be verified interactively in the
-real macOS menu bar app.
+real macOS menu bar app. `tauri dev` runs the debug binary, which is a different
+`Info.plist` and a different signature from the bundle, so anything that depends
+on the bundle — the Accessibility grant behind the selected word, for instance —
+has to be checked in the installed app.
