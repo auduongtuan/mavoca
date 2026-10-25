@@ -205,6 +205,7 @@ fn init_database(app: &tauri::AppHandle) -> Result<Connection, String> {
 
     create_schema(&conn)?;
     migrate_legacy_vocabs(&conn)?;
+    ensure_points_column(&conn)?;
     ensure_default_settings(&conn)?;
     seed_if_empty(&conn)?;
 
@@ -220,6 +221,7 @@ fn create_schema(conn: &Connection) -> Result<(), String> {
             id INTEGER PRIMARY KEY,
             word TEXT NOT NULL UNIQUE COLLATE NOCASE,
             source TEXT NOT NULL DEFAULT 'manual',
+            points INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -270,6 +272,30 @@ fn ensure_definition_vi_column(conn: &Connection) -> Result<(), String> {
         [],
     )
     .map_err(|err| format!("Failed to add the Vietnamese definition column: {err}"))?;
+
+    Ok(())
+}
+
+/// `points` arrived after the first databases were created, the same problem
+/// `definition_vi` has: `CREATE TABLE IF NOT EXISTS` leaves an existing table
+/// alone, so an older database needs the `ALTER TABLE`.
+///
+/// Unlike that one this runs *after* `migrate_legacy_vocabs`, which rebuilds
+/// `vocabs` from scratch: adding the column before the rebuild would only lose
+/// it again.
+fn ensure_points_column(conn: &Connection) -> Result<(), String> {
+    if table_columns(conn, "vocabs")?
+        .iter()
+        .any(|column| column == "points")
+    {
+        return Ok(());
+    }
+
+    conn.execute(
+        "ALTER TABLE vocabs ADD COLUMN points INTEGER NOT NULL DEFAULT 0",
+        [],
+    )
+    .map_err(|err| format!("Failed to add the points column: {err}"))?;
 
     Ok(())
 }
@@ -382,6 +408,7 @@ fn migrate_legacy_vocabs(conn: &Connection) -> Result<(), String> {
                 id INTEGER PRIMARY KEY,
                 word TEXT NOT NULL UNIQUE COLLATE NOCASE,
                 source TEXT NOT NULL DEFAULT 'manual',
+                points INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -749,6 +776,7 @@ fn build_word(
     id: i64,
     word: String,
     source: String,
+    points: i64,
     created_at: String,
     updated_at: String,
     rows: Vec<DefinitionRow>,
@@ -761,6 +789,7 @@ fn build_word(
         source: WordSource::from_str(&source),
         definition_count: count_definitions(&entries),
         entries,
+        points,
         created_at,
         updated_at,
     }
@@ -800,7 +829,7 @@ fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, word, source, created_at, updated_at
+            SELECT id, word, source, points, created_at, updated_at
             FROM vocabs
             ORDER BY lower(word) ASC
             "#,
@@ -813,21 +842,23 @@ fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
+                row.get::<_, i64>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })
         .map_err(|err| format!("Failed to read vocabulary: {err}"))?;
 
     let mut words = Vec::new();
     for row in rows {
-        let (id, word, source, created_at, updated_at) =
+        let (id, word, source, points, created_at, updated_at) =
             row.map_err(|err| format!("Failed to decode vocabulary: {err}"))?;
         let definitions = definitions_by_word.remove(&id).unwrap_or_default();
         words.push(build_word(
             id,
             word,
             source,
+            points,
             created_at,
             updated_at,
             definitions,
@@ -840,28 +871,29 @@ fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
 fn get_vocab_by_id(conn: &Connection, id: i64) -> Result<Option<VocabWord>, String> {
     let header = conn
         .query_row(
-            "SELECT id, word, source, created_at, updated_at FROM vocabs WHERE id = ?1",
+            "SELECT id, word, source, points, created_at, updated_at FROM vocabs WHERE id = ?1",
             params![id],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
         .optional()
         .map_err(|err| format!("Failed to read vocabulary word: {err}"))?;
 
-    let Some((id, word, source, created_at, updated_at)) = header else {
+    let Some((id, word, source, points, created_at, updated_at)) = header else {
         return Ok(None);
     };
 
     let rows = definition_rows_for(conn, id)?;
     Ok(Some(build_word(
-        id, word, source, created_at, updated_at, rows,
+        id, word, source, points, created_at, updated_at, rows,
     )))
 }
 
@@ -1338,20 +1370,149 @@ fn word_step_index(cards: &[VocabCard], current: usize, direction: i32) -> Optio
     Some(previous)
 }
 
-#[tauri::command]
-fn random_vocab_card(state: tauri::State<AppState>, app: tauri::AppHandle) -> Option<VocabCard> {
-    let len = state.cards.lock().unwrap().len();
-    if len == 0 {
+/// A word's share of the rotation draw. Points make a word rarer without ever
+/// silencing it: 0 points weighs 1, 1 point a half, 3 points a quarter. A word
+/// confirmed a dozen times still comes back round, which is the point of
+/// spacing it out rather than retiring it.
+fn draw_weight(points: i64) -> f64 {
+    1.0 / (points.max(0) as f64 + 1.0)
+}
+
+/// Picks one candidate in proportion to its weight. `roll` is in `[0, 1)` and
+/// is the only randomness here, which is what makes the draw a pure function
+/// the tests can pin down.
+fn weighted_pick(points: &[i64], roll: f64) -> Option<usize> {
+    if points.is_empty() {
         return None;
     }
 
-    // Cheap, dependency-free jitter: the clock is plenty for shuffling a popup.
-    let seed = std::time::SystemTime::now()
+    let total: f64 = points.iter().copied().map(draw_weight).sum();
+    let mut target = roll.clamp(0.0, 1.0) * total;
+
+    for (index, &candidate) in points.iter().enumerate() {
+        target -= draw_weight(candidate);
+        if target < 0.0 {
+            return Some(index);
+        }
+    }
+
+    // Only reachable when rounding leaves a crumb at the very top of the range.
+    Some(points.len() - 1)
+}
+
+/// Cheap, dependency-free jitter in `[0, 1)`. The rotation draws at most once
+/// per interval and the shuffle button once per click, so the sub-second clock
+/// is spread enough to shuffle a popup — the reasoning the old modulo shuffle
+/// already rested on.
+fn clock_roll() -> f64 {
+    let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.subsec_nanos() as usize)
+        .map(|elapsed| elapsed.subsec_nanos())
         .unwrap_or(0);
 
-    apply_card_index(&app, &state, seed % len)
+    (nanos % 1_000_000) as f64 / 1_000_000.0
+}
+
+/// The rotation's next card: a word drawn by weight, landing on its first
+/// definition.
+///
+/// The draw is per word, not per definition, so a word with twenty definitions
+/// does not flood the rotation; the ‹ › stepper is still how the rest of a
+/// word's definitions are reached. The word on screen is left out while there
+/// is another to pick, so a tick always visibly moves.
+fn weighted_next_index(state: &AppState) -> Option<usize> {
+    // Locks are taken one at a time: nothing in this file ever holds `cards`
+    // and `current_index` together.
+    let current = *state.current_index.lock().unwrap();
+
+    let (word_starts, current_word) = {
+        let cards = state.cards.lock().unwrap();
+        if cards.is_empty() {
+            return None;
+        }
+
+        // `build_cards` puts a word's definitions next to each other, so a new
+        // `vocab_id` is the first card of a word.
+        let mut starts: Vec<(usize, i64)> = Vec::new();
+        let mut previous: Option<i64> = None;
+        for (index, card) in cards.iter().enumerate() {
+            if previous != Some(card.vocab_id) {
+                starts.push((index, card.vocab_id));
+                previous = Some(card.vocab_id);
+            }
+        }
+
+        (starts, cards.get(current).map(|card| card.vocab_id))
+    };
+
+    let points: HashMap<i64, i64> = {
+        let list = state.vocab_list.lock().unwrap();
+        list.iter().map(|word| (word.id, word.points)).collect()
+    };
+
+    let mut pool: Vec<(usize, i64)> = word_starts
+        .iter()
+        .copied()
+        .filter(|(_, vocab_id)| Some(*vocab_id) != current_word)
+        .collect();
+    if pool.is_empty() {
+        pool = word_starts;
+    }
+
+    let weights: Vec<i64> = pool
+        .iter()
+        .map(|(_, vocab_id)| points.get(vocab_id).copied().unwrap_or(0))
+        .collect();
+
+    weighted_pick(&weights, clock_roll()).map(|choice| pool[choice].0)
+}
+
+#[tauri::command]
+fn random_vocab_card(state: tauri::State<AppState>, app: tauri::AppHandle) -> Option<VocabCard> {
+    let next = weighted_next_index(&state)?;
+    apply_card_index(&app, &state, next)
+}
+
+/// Records that the word on screen was remembered, then draws the next one.
+///
+/// A point is not content: this leaves `updated_at` alone and does not kick off
+/// a backup, which copies the whole database. The button is made to be pressed
+/// in bursts, so the points ride to Dropbox with the next real change instead.
+#[tauri::command]
+fn award_vocab_point(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<Option<VocabCard>, String> {
+    let Some(card) = current_card(&state) else {
+        return Ok(None);
+    };
+
+    {
+        let conn = state.db.lock().unwrap();
+        conn.execute(
+            "UPDATE vocabs SET points = points + 1 WHERE id = ?1",
+            params![card.vocab_id],
+        )
+        .map_err(|err| format!("Failed to record the point: {err}"))?;
+    }
+
+    // The cached list is both what the draw weighs and what the manager shows,
+    // so it is bumped in place. Rebuilding it here would also rebuild the card
+    // list and move the rotation out from under the popup.
+    let list = {
+        let mut list = state.vocab_list.lock().unwrap();
+        if let Some(word) = list.iter_mut().find(|word| word.id == card.vocab_id) {
+            word.points += 1;
+        }
+        list.clone()
+    };
+    let _ = app.emit("vocab-list-changed", list);
+
+    let Some(next) = weighted_next_index(&state) else {
+        return Ok(None);
+    };
+
+    Ok(apply_card_index(&app, &state, next))
 }
 
 /// Jumps the rotation to the first definition of `id`.
@@ -2318,13 +2479,10 @@ fn start_auto_rotation(app: tauri::AppHandle, state: AppState) {
             }
             hidden_for = Duration::ZERO;
 
-            let len = state.cards.lock().unwrap().len();
-            if len == 0 {
+            let Some(index) = weighted_next_index(&state) else {
                 continue;
-            }
-
-            let index = *state.current_index.lock().unwrap();
-            apply_card_index(&app, &state, (index + 1) % len);
+            };
+            apply_card_index(&app, &state, index);
         }
     });
 }
@@ -2393,6 +2551,7 @@ pub fn run() {
             step_vocab_card,
             step_vocab_word,
             random_vocab_card,
+            award_vocab_point,
             set_current_vocab_id,
             get_settings,
             update_settings,
@@ -3039,6 +3198,81 @@ mod tests {
         let saved = get_vocab_by_id(&conn, id).expect("read").expect("word");
         assert_eq!(saved.definition_count, 1);
         assert_eq!(saved.source, WordSource::Manual);
+    }
+
+    /// The column arrived after the first databases were created. Unlike the
+    /// Vietnamese one it is added after the legacy migration, which rebuilds
+    /// `vocabs` from scratch — so this checks it survives that order.
+    #[test]
+    fn adds_the_points_column_to_an_older_database() {
+        let conn = legacy_database();
+        create_schema(&conn).expect("schema");
+        migrate_legacy_vocabs(&conn).expect("migration");
+        ensure_points_column(&conn).expect("points column");
+        // Launch runs it every time, and it must not fail on the second.
+        ensure_points_column(&conn).expect("points column again");
+
+        let words = list_vocab_from_db(&conn).expect("list");
+        assert_eq!(words.len(), 2);
+        // The words came through the rebuild, each starting from zero.
+        assert_eq!(words[0].word, "ephemeral");
+        assert!(words.iter().all(|word| word.points == 0));
+    }
+
+    /// A point belongs to the word, not to its definitions, so re-fetching or
+    /// hand-editing the tree — both of which replace every definition row —
+    /// must leave the score alone.
+    #[test]
+    fn points_survive_a_resave_of_the_tree() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+
+        let id = save_word_tree(&conn, None, "run", WordSource::Cambridge, &sample_entries())
+            .expect("save");
+        conn.execute("UPDATE vocabs SET points = 4 WHERE id = ?1", params![id])
+            .expect("award");
+
+        save_word_tree(
+            &conn,
+            Some(id),
+            "run",
+            WordSource::Manual,
+            &sample_entries(),
+        )
+        .expect("resave");
+
+        assert_eq!(
+            get_vocab_by_id(&conn, id)
+                .expect("read")
+                .expect("word")
+                .points,
+            4
+        );
+    }
+
+    /// The draw is what makes the button worth pressing: a word you keep
+    /// confirming has to fall back behind the ones you have not.
+    #[test]
+    fn the_draw_favours_the_words_with_the_fewest_points() {
+        // Weights are 1, 1/2, 1/4 — a total of 1.75, so the first word owns
+        // the bottom 4/7 of the range, the second the next 2/7.
+        let points = [0, 1, 3];
+        assert_eq!(weighted_pick(&points, 0.0), Some(0));
+        assert_eq!(weighted_pick(&points, 0.5), Some(0));
+        assert_eq!(weighted_pick(&points, 0.6), Some(1));
+        assert_eq!(weighted_pick(&points, 0.85), Some(1));
+        assert_eq!(weighted_pick(&points, 0.9), Some(2));
+        // Rounding at the very top of the range still lands on a candidate.
+        assert_eq!(weighted_pick(&points, 1.0), Some(2));
+
+        // A mastered word is rarer, never silent.
+        assert!(draw_weight(50) > 0.0);
+        assert!(draw_weight(0) > draw_weight(1));
+        // A score can only ever have been incremented, but the weight must not
+        // blow up if one somehow goes negative.
+        assert_eq!(draw_weight(-3), draw_weight(0));
+
+        assert_eq!(weighted_pick(&[], 0.5), None);
     }
 
     /// Deleting a word must take its definitions with it, which only happens

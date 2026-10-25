@@ -4,15 +4,16 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   ArrowLeft,
   ArrowRight,
-  Books,
   CaretLeft,
   CaretRight,
+  Check,
   Shuffle,
   SpeakerHigh,
   Translate,
 } from '@phosphor-icons/react';
 import { LacVietMeaning, VocabCardData } from '../types';
 import { usePopupAutoResize } from '../hooks/usePopupAutoResize';
+import { IconButton } from './ui/IconButton';
 
 const UK_VOICE_LANG = 'en-GB';
 const US_VOICE_LANG = 'en-US';
@@ -107,7 +108,8 @@ interface VocabCardProps {
   onNextMeaning: () => void;
   onPreviousMeaning: () => void;
   onRandom: () => void;
-  onManage: () => void;
+  /** Scores the word as remembered and moves on to the next one. */
+  onRemembered: () => void;
 }
 
 export const VocabCard: React.FC<VocabCardProps> = ({
@@ -117,7 +119,7 @@ export const VocabCard: React.FC<VocabCardProps> = ({
   onNextMeaning,
   onPreviousMeaning,
   onRandom,
-  onManage
+  onRemembered
 }) => {
   const pronunciations = pronunciationsOf(card);
   const cardKey = translationKey(card);
@@ -258,14 +260,13 @@ export const VocabCard: React.FC<VocabCardProps> = ({
           <div className="word-line">
             <h1 className="word">{card.word}</h1>
             {canSpeak && pronunciations.length === 0 && (
-              <button
-                className="speak-btn"
+              <IconButton
+                size="small"
                 onClick={() => speakWord(card.word, US_VOICE_LANG)}
-                title="Pronounce"
-                aria-label={`Pronounce ${card.word}`}
+                label={`Pronounce ${card.word}`}
               >
                 <SpeakerHigh size={15} weight="bold" aria-hidden />
-              </button>
+              </IconButton>
             )}
           </div>
           {/* Above the part of speech and the transcription, which it changes:
@@ -273,25 +274,15 @@ export const VocabCard: React.FC<VocabCardProps> = ({
               the divider. */}
           {card.total > 1 && (
             <div className="meaning-stepper">
-              <button
-                onClick={onPreviousMeaning}
-                className="meaning-step-btn"
-                title="Previous meaning"
-                aria-label="Previous meaning"
-              >
+              <IconButton size="small" onClick={onPreviousMeaning} label="Previous meaning">
                 <CaretLeft size={12} weight="bold" aria-hidden />
-              </button>
+              </IconButton>
               <span className="card-position">
                 {card.position} of {card.total}
               </span>
-              <button
-                onClick={onNextMeaning}
-                className="meaning-step-btn"
-                title="Next meaning"
-                aria-label="Next meaning"
-              >
+              <IconButton size="small" onClick={onNextMeaning} label="Next meaning">
                 <CaretRight size={12} weight="bold" aria-hidden />
-              </button>
+              </IconButton>
             </div>
           )}
         </div>
@@ -312,14 +303,13 @@ export const VocabCard: React.FC<VocabCardProps> = ({
                   )}
                   <span className="pronunciation-ipa">{ipa}</span>
                   {canSpeak && (
-                    <button
-                      className="pronunciation-speak"
+                    <IconButton
+                      size="small"
                       onClick={() => speakWord(card.word, lang)}
-                      title={`Pronounce in ${accent} English`}
-                      aria-label={`Pronounce ${card.word} in ${accent} English`}
+                      label={`Pronounce ${card.word} in ${accent} English`}
                     >
                       <SpeakerHigh size={12} weight="bold" aria-hidden />
-                    </button>
+                    </IconButton>
                   )}
                 </span>
               ))}
@@ -415,25 +405,31 @@ export const VocabCard: React.FC<VocabCardProps> = ({
         </div>
       )}
 
+      {/* Moving around the vocabulary is on the left and stays quiet; the one
+          thing that changes something is on the right. The way out to the
+          manager lives in the tray menu rather than here. */}
       <div className="controls">
         <div className="control-group">
-          <button onClick={onPrevious} className="control-btn" title="Previous word" aria-label="Previous word">
+          <IconButton onClick={onPrevious} label="Previous word">
             <ArrowLeft size={15} weight="bold" aria-hidden />
-          </button>
-          <button onClick={onNext} className="control-btn" title="Next word" aria-label="Next word">
+          </IconButton>
+          <IconButton onClick={onNext} label="Next word">
             <ArrowRight size={15} weight="bold" aria-hidden />
-          </button>
+          </IconButton>
+          <IconButton onClick={onRandom} label="Random word">
+            <Shuffle size={15} weight="bold" aria-hidden />
+          </IconButton>
         </div>
-        <button onClick={onRandom} className="control-btn random-btn" title="Random" aria-label="Random">
-          <Shuffle size={15} weight="bold" aria-hidden />
-        </button>
+        {/* The score itself lives in the manager: pressing this moves to the
+            next word, which is the feedback, and the card stays a card. */}
         <button
-          onClick={onManage}
-          className="control-btn manage-btn"
-          title="Manage vocabulary"
-          aria-label="Manage vocabulary"
+          onClick={onRemembered}
+          className="got-it-btn"
+          title="Remembered this one — show the next word"
+          aria-label="Remembered this word"
         >
-          <Books size={15} weight="bold" aria-hidden />
+          <Check size={14} weight="bold" aria-hidden />
+          Got it
         </button>
       </div>
     </div>

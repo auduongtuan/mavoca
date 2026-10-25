@@ -90,6 +90,20 @@ export const useVocab = () => {
   const getNextMeaning = useCallback(() => stepMeaning(1), [stepMeaning]);
   const getPreviousMeaning = useCallback(() => stepMeaning(-1), [stepMeaning]);
 
+  // "Got it" scores the word on screen and draws the next one in the same
+  // round trip: Rust owns the weighted draw, so the card it returns already
+  // reflects the point just awarded.
+  const markRemembered = useCallback(async () => {
+    try {
+      const next = await invoke<VocabCardData | null>('award_vocab_point');
+      if (next) {
+        setCard(next);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
   const getRandomWord = useCallback(async () => {
     try {
       const next = await invoke<VocabCardData | null>('random_vocab_card');
@@ -110,6 +124,7 @@ export const useVocab = () => {
     getPreviousWord,
     getNextMeaning,
     getPreviousMeaning,
+    markRemembered,
     reload: loadCard,
   };
 };

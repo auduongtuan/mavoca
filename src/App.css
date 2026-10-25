@@ -84,8 +84,13 @@ html, body {
  * the card must not size itself from the window.
  */
 .vocab-card {
-  /* Shared by the meaning stepper and the VI toggle so they line up. */
+  /* The VI toggle's height; the small icon button matches it on its own. */
   --meta-btn-size: 20px;
+  /* An icon button's padding. It is cancelled by an equal negative margin, so
+     a row of them has to add it back to its `gap` — hence a variable rather
+     than a number buried in the rule. */
+  --icon-btn-pad: 7px;
+  --icon-btn-pad-sm: 4px;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -130,27 +135,13 @@ html, body {
 .word-line {
   display: flex;
   align-items: center;
-  gap: 6px;
+  /* Word to speaker glyph; the button's padding cancels out. */
+  gap: 10px;
   min-width: 0;
 }
 
-.speak-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
+.word-line .icon-btn {
   flex-shrink: 0;
-  padding: 0;
-  border: 1px solid rgba(55, 53, 47, 0.18);
-  border-radius: 50%;
-  background: transparent;
-  color: #37352f;
-  cursor: pointer;
-}
-
-.speak-btn:hover {
-  background: rgba(55, 53, 47, 0.06);
 }
 
 .word {
@@ -175,7 +166,16 @@ html, body {
 .pronunciation {
   display: inline-flex;
   align-items: center;
+  /* The accent label sits tight against the transcription it belongs to. */
   gap: 3px;
+}
+
+/* The speaker is not part of that pair and needs air, so its distance is set
+   on the button rather than on the row. The arithmetic is spelled out because
+   an icon button's gap is measured glyph to glyph: the row's own gap and the
+   button's padding are both already inside the 9px. */
+.pronunciation .icon-btn {
+  margin-left: calc(9px - 3px - var(--icon-btn-pad-sm));
 }
 
 /* The accent only earns a label when the card carries both, which is the one
@@ -191,26 +191,6 @@ html, body {
 .pronunciation-ipa {
   color: inherit;
   font-variant-numeric: tabular-nums;
-}
-
-.pronunciation-speak {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
-  margin-left: 1px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: rgba(55, 53, 47, 0.7);
-  cursor: pointer;
-}
-
-.pronunciation-speak:hover {
-  background: rgba(55, 53, 47, 0.07);
-  color: #37352f;
 }
 
 .category {
@@ -278,25 +258,8 @@ html, body {
 .meaning-stepper {
   display: flex;
   align-items: center;
-  gap: 5px;
-}
-
-.meaning-step-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--meta-btn-size);
-  height: var(--meta-btn-size);
-  padding: 0;
-  border: 1px solid rgba(55, 53, 47, 0.18);
-  border-radius: 5px;
-  background: transparent;
-  color: #37352f;
-  cursor: pointer;
-}
-
-.meaning-step-btn:hover {
-  background: rgba(55, 53, 47, 0.06);
+  /* Glyph to counter, the carets' padding having cancelled out. */
+  gap: 9px;
 }
 
 .card-meta-end {
@@ -478,63 +441,88 @@ html, body {
 
 .controls {
   display: flex;
-  /* Wider than inside .control-group, so Random reads as its own action. */
+  align-items: center;
   gap: 14px;
   margin-top: auto;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   padding-top: 12px;
 }
 
-/* Previous and Next, kept side by side. */
+/* Moving around the vocabulary: previous, next, and random, kept together on
+   the left so the one button that changes something stands alone opposite. */
 .control-group {
   display: flex;
-  gap: 4px;
+  /* Between icon buttons the padding and the negative margin cancel, so this
+     is the distance between the glyphs themselves, not between their boxes. */
+  gap: 16px;
 }
 
-.control-btn {
+/* A quiet icon button: the fill arrives under the pointer and nowhere else, so
+   a row of them reads as one group rather than three competing controls.
+   The padding is cancelled by an equal negative margin, so the button occupies
+   only its icon and the hover fill grows outwards into the gap instead of
+   indenting the glyph away from the text and the card edge beside it. */
+.icon-btn {
+  --icon-btn-inset: var(--icon-btn-pad, 7px);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 30px;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  margin: calc(var(--icon-btn-inset) * -1);
+  padding: var(--icon-btn-inset);
+  border: 0;
   border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.75);
   cursor: pointer;
-  transition: all 0.2s ease;
-  background: rgba(255, 255, 255, 0.15);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.icon-btn-small {
+  --icon-btn-inset: var(--icon-btn-pad-sm, 4px);
+  border-radius: 5px;
+}
+
+.icon-btn:hover {
+  background: rgba(55, 53, 47, 0.08);
   color: #37352f;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
-.control-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-  border-color: rgba(255, 255, 255, 0.35);
-  transform: translateY(-1px);
+.icon-btn:active {
+  background: rgba(55, 53, 47, 0.14);
 }
 
-.control-btn:active {
-  background: rgba(255, 255, 255, 0.3);
-  transform: translateY(0);
+.icon-btn:focus-visible {
+  outline: 2px solid rgba(55, 53, 47, 0.5);
+  outline-offset: 1px;
 }
 
-.random-btn {
-  background: rgba(55, 53, 47, 0.7);
+/* The card's one primary action, and so the only solid and only labelled
+   button in the footer. Navigation sits on the left; this sits opposite it. */
+.got-it-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-left: auto;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  background: #37352f;
   color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.3);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
 }
 
-.random-btn:hover {
-  background: rgba(55, 53, 47, 0.85);
+.got-it-btn:hover {
+  background: #4a4842;
   border-color: rgba(255, 255, 255, 0.4);
 }
 
-/* Navigation sits on the left, the way out to the manager on the right. */
-.manage-btn {
-  margin-left: auto;
+.got-it-btn:active {
+  background: #262522;
 }
 
 /* Vocabulary Manager */
@@ -772,7 +760,8 @@ html, body {
 
 .word-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* Word, its score, then its definition count. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -810,6 +799,22 @@ html, body {
   color: #787774;
   font-size: 10px;
   text-transform: uppercase;
+}
+
+/* The "Got it" score. A word still at zero stays quiet; one you have
+   confirmed reads as earned, which is the only reward the feature offers. */
+.word-row small.word-points {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: none;
+  color: rgba(55, 53, 47, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+.word-row small.word-points.scored {
+  color: #37352f;
+  font-weight: 700;
 }
 
 .manager-empty {
@@ -1606,43 +1611,42 @@ html, body {
     color: rgba(255, 255, 255, 0.62);
   }
 
-  .pronunciation-speak {
-    color: rgba(255, 255, 255, 0.62);
-  }
-
-  .pronunciation-speak:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #ffffff;
-  }
-
   .example-text {
     color: #ffffff;
   }
 
-  .control-btn {
-    background: rgba(255, 255, 255, 0.1);
-    color: #e3e2e0;
-    border-color: rgba(255, 255, 255, 0.2);
+  .icon-btn {
+    color: rgba(255, 255, 255, 0.75);
   }
 
-  .control-btn:hover {
-    background: rgba(255, 255, 255, 0.15);
-    border-color: rgba(255, 255, 255, 0.3);
+  .icon-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
   }
 
-  .control-btn:active {
+  .icon-btn:active {
     background: rgba(255, 255, 255, 0.2);
   }
 
-  .random-btn {
-    background: rgba(227, 226, 224, 0.25);
-    color: #ffffff;
-    border-color: rgba(255, 255, 255, 0.35);
+  .icon-btn:focus-visible {
+    outline-color: rgba(255, 255, 255, 0.6);
   }
 
-  .random-btn:hover {
-    background: rgba(227, 226, 224, 0.35);
+  /* Light on dark, the inverse of light mode: the primary action stays the
+     highest-contrast thing in the footer. */
+  .got-it-btn {
+    background: #e3e2e0;
+    color: #1f1e1b;
     border-color: rgba(255, 255, 255, 0.45);
+  }
+
+  .got-it-btn:hover {
+    background: #ffffff;
+    border-color: rgba(255, 255, 255, 0.6);
+  }
+
+  .got-it-btn:active {
+    background: #cfcecb;
   }
 
 
@@ -1756,6 +1760,14 @@ html, body {
   .word-row.active {
     background: rgba(255, 255, 255, 0.14);
     border-color: rgba(255, 255, 255, 0.16);
+  }
+
+  .word-row small.word-points {
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  .word-row small.word-points.scored {
+    color: #e3e2e0;
   }
 
   .word-row small,
@@ -1920,9 +1932,7 @@ html, body {
     color: rgba(227, 226, 224, 0.66);
   }
 
-  .translate-btn,
-  .speak-btn,
-  .meaning-step-btn {
+  .translate-btn {
     border-color: rgba(255, 255, 255, 0.2);
     color: #e3e2e0;
   }
@@ -1934,9 +1944,7 @@ html, body {
     color: #191919;
   }
 
-  .translate-btn:hover,
-  .speak-btn:hover,
-  .meaning-step-btn:hover {
+  .translate-btn:hover {
     background: rgba(255, 255, 255, 0.08);
   }
 

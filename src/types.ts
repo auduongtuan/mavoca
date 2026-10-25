@@ -27,6 +27,12 @@ export interface VocabWord {
   source: WordSource;
   entries: VocabEntry[];
   definitionCount: number;
+  /**
+   * How many times "Got it" has been pressed on this word. Rotation weights a
+   * word by `1 / (points + 1)`, so the ones you have not confirmed come up
+   * most often. Shown in the manager; the popup card stays a card.
+   */
+  points: number;
   createdAt: string;
   updatedAt: string;
 }

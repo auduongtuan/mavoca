@@ -52,6 +52,8 @@ and `src-tauri/tauri.conf.json`.
   guide-word sense groups, and definitions with their examples.
 - `src/components/SettingsPanel.tsx` renders the open-at-login toggle, the
   add-word shortcut, the rotation interval, and the backup path settings UI.
+- `src/components/ui/` holds the shared primitives: `ConfirmDialog`, built on
+  Base UI's `AlertDialog`, and `IconButton`, the popup's quiet icon control.
 - `src/components/ShortcutRecorder.tsx` records a key combination as an
   accelerator string such as `Cmd+Ctrl+Shift+N` and displays it as `⌃⇧⌘N`.
 - `src/components/QuickAdd.tsx` takes a single word and calls `add_vocab_word`,
@@ -108,6 +110,8 @@ Tables:
   - `word TEXT NOT NULL UNIQUE COLLATE NOCASE`
   - `source TEXT NOT NULL DEFAULT 'manual'` — `macos`, `cambridge`,
     `dictionaryapi`, or `manual`
+  - `points INTEGER NOT NULL DEFAULT 0` — how often the popup's `Got it`
+    button has been pressed on this word; see Points And Rotation
   - `created_at TEXT NOT NULL DEFAULT (datetime('now'))`
   - `updated_at TEXT NOT NULL DEFAULT (datetime('now'))`
 - `vocab_definitions` — one row per definition
@@ -148,12 +152,17 @@ the US pronunciation, `meaning` the single definition, and `example` its only
 example. The migration is transactional and idempotent.
 
 A column added later is handled separately, because `CREATE TABLE IF NOT EXISTS`
-leaves an existing table alone: `ensure_definition_vi_column` checks
-`table_columns` and issues an `ALTER TABLE`, once per launch. Add columns that
-way rather than editing the `CREATE` alone, which only new databases would get.
+leaves an existing table alone: `ensure_definition_vi_column` and
+`ensure_points_column` check `table_columns` and issue an `ALTER TABLE`, once
+per launch. Add columns that way rather than editing the `CREATE` alone, which
+only new databases would get. `ensure_points_column` runs *after*
+`migrate_legacy_vocabs`, not inside `create_schema`: that migration rebuilds
+`vocabs` from scratch, so a column added before it is only lost again. The
+rebuild's own `CREATE TABLE vocabs_migrated` has to keep pace with the current
+`vocabs` shape for the same reason.
 
 The frontend mirrors these shapes in `src/types.ts` using camelCase:
-`VocabWord` holds `entries`, `source`, and `definitionCount`; `VocabCardData` is
+`VocabWord` holds `entries`, `source`, `definitionCount`, and `points`; `VocabCardData` is
 one flattened definition with `definitionId`, `position`, and `total` for the
 popup.
 
@@ -314,6 +323,45 @@ has to be given up to answer "what does this mean?".
   can never report itself taller than the window and the window can never grow;
   that deadlock is why the number is fixed. The pane is what the window is sized
   from, so a list has never been enough to size it.
+
+## Points And Rotation
+
+A word carries a score, and rotation leans on it: the words you have not
+confirmed come up far more often than the ones you have.
+
+- The popup's footer has one primary button, `Got it`. It adds a point to the
+  word on screen and draws the next word in the same round trip
+  (`award_vocab_point`), so the popup can be run down like a quick self-test.
+  There is no button that subtracts.
+- The score belongs to the **word**, not to the definition: `vocabs.points`.
+  Definition rows are replaced wholesale on every manager save and re-fetch, so
+  a score kept there would need the carry-over `definition_vi` does, and would
+  still be lost whenever a definition was re-worded. `save_word_tree` touches
+  only `word`, `source`, and `updated_at`, so points survive a resave for free —
+  there is a test holding that.
+- The score is shown in the **manager list**, not on the card. The popup stays
+  a card; pressing the button moves to the next word, and that is the feedback.
+- `weighted_pick` draws one candidate in proportion to `draw_weight`, which is
+  `1 / (points + 1)`: a word at 0 comes up twice as often as one at 1 and four
+  times as often as one at 3. Nothing ever falls to zero chance, which is the
+  point — a mastered word still has to resurface. `roll` is the only randomness
+  and is passed in, so the draw is a pure function the tests pin down;
+  `clock_roll` supplies it from the sub-second clock at runtime, the same
+  reasoning the old modulo shuffle rested on.
+- The draw is per **word**, landing on its first definition, so a word with
+  twenty definitions does not flood the rotation. `weighted_next_index` finds
+  the first card of each word the way `step_vocab_word` finds boundaries — a run
+  of cards sharing a `vocab_id` — and leaves the word on screen out of the pool
+  while there is another to pick, so a tick always visibly moves.
+- Auto-rotation, the tray's shuffle, and `Got it` all draw this way. The ‹ ›
+  stepper and the footer's ← → do **not**: browsing stays sequential and
+  predictable, and only the automatic moves are weighted.
+- Awarding a point deliberately does **not** bump `updated_at` or sync the
+  backup. A point is not content, and the backup is a whole-database
+  `VACUUM INTO`; the button is made to be pressed in bursts, so points reach
+  Dropbox with the next real change. It does emit `vocab-list-changed`, and it
+  bumps the cached `vocab_list` in place rather than reloading — a reload would
+  rebuild the card list and move the rotation out from under the popup.
 
 ## Backup Behavior
 
@@ -585,15 +633,17 @@ Mavoca is a menu bar extra, not an app in the Dock.
   window can never shrink. The 6px inset that `usePopupAutoResize` adds to the
   card belongs to `.app-body`, the card's parent, which is where the hook reads
   it from.
-- Auto-rotation steps to the next definition every `rotation_interval_secs`
-  seconds (default `DEFAULT_ROTATION_INTERVAL_SECS`, 10; 0 turns it off),
-  counting only time the popup is hidden: opening the popup resets the count,
-  so the word never changes the moment it closes. The thread checks once per
+- Auto-rotation draws the next word every `rotation_interval_secs` seconds
+  (default `DEFAULT_ROTATION_INTERVAL_SECS`, 10; 0 turns it off), counting only
+  time the popup is hidden: opening the popup resets the count, so the word
+  never changes the moment it closes. The thread checks once per
   `ROTATION_TICK` and reads the interval from `AppState`, so a change in
-  Settings applies without a restart.
-- The rotation unit is a single definition, not a word. Rust owns the flattened
-  card list in `AppState.cards`, and `current_index` indexes into it. The two
-  ways of moving are separate on purpose:
+  Settings applies without a restart. The draw is weighted by the word's
+  points; see Points And Rotation.
+- The browsing unit is a single definition, not a word. Rust owns the flattened
+  card list in `AppState.cards`, and `current_index` indexes into it. Both of
+  these are sequential, unlike the automatic draw, and they are separate from
+  each other on purpose:
   - The ‹ › buttons beside the popup's `1 of 3` counter walk the definitions of
     the current word and wrap within it; `useVocab` turns them into
     `step_vocab_card` deltas. They sit on the card's word line, above the part
@@ -627,8 +677,9 @@ Mavoca is a menu bar extra, not an app in the Dock.
   word's line, and the part-of-speech badge with the pronunciation row sits
   under it, because a step replaces all of them: the badge and the
   transcription belong to the definition on screen, not to the word.
-  `--meta-btn-size` lives on `.vocab-card` rather than `.card-meta`, since the
-  stepper moved out of that row and still has to match the VI toggle.
+  `--meta-btn-size` is now the VI toggle's own height, kept on `.vocab-card`
+  beside the icon-button paddings; the stepper's carets are `IconButton`
+  `small`, which comes out at the same 20px without being told to.
 - The pronunciation row (`.word-pronunciation`) shows the card's `pronUk` and
   `pronUs` as accent-labelled chips, each with its own speak button so each is
   read in its own accent. Equal values collapse to a single chip, and a word
@@ -645,7 +696,28 @@ Mavoca is a menu bar extra, not an app in the Dock.
   (`SENSES_SHOWN`). Only the first sense is filled in, and only when the
   translated definition ranked it there — do not present a sense as *the*
   translation, because it is not one.
-- Primary buttons should use a solid background.
+- Primary buttons should use a solid background. The popup footer has exactly
+  one: `Got it`, which is also the only labelled button there. It sits on the
+  right, opposite the navigation, and is the same height as the icon buttons —
+  it earns its weight from the fill and the label, not from size.
+- Every icon-only control in the popup is an `IconButton`
+  (`src/components/ui/IconButton.tsx`): no border, no fill, and a background
+  only under the pointer. `medium` is the footer's navigation (previous, next,
+  random); `small` is everything sitting in a line of text — the definition
+  stepper's carets and both speakers. Use it for any new icon-only control
+  rather than restyling a button in place.
+- An `IconButton`'s padding is cancelled by an equal negative margin
+  (`--icon-btn-pad`, `--icon-btn-pad-sm` on `.vocab-card`, with fallbacks in
+  the rule so the component stands alone elsewhere). The pointer gets something
+  to hit, while the layout is charged only for the glyph, so icons line up with
+  the text and the card edge beside them instead of sitting indented. The
+  consequence to remember: **between two of them a `gap` is the distance
+  between the glyphs, not between their boxes** — `.control-group`,
+  `.meaning-stepper`, `.word-line`, and `.pronunciation` all set their gap in
+  those terms, and a row that forgets this will have its buttons overlap.
+- The popup has no way into the manager. It is a 320px card and the tray menu
+  already carries `Vocabulary Manager`, so that is the single way in; do not
+  add a button back to the card without moving something else out.
 - Muted text is measured, not guessed. Labels and metadata in the popup sit at
   4.5:1 or better against the vibrancy behind the card, which is `0.7` ink in
   light mode and `0.62`-`0.66` white in dark; the card's `1 of 3` counter, its
