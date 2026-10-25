@@ -256,28 +256,6 @@ pub fn prefer_ipa_pronunciation() -> bool {
     )
 }
 
-/// The macOS dictionary alone, without the online fallbacks.
-///
-/// The add-word window previews a highlighted suggestion with it: moving through
-/// a list must never start a request, and this source answers locally. Nothing is
-/// saved here; `fetch_word` is still what imports a word, so a word Oxford does
-/// not carry is looked up on Cambridge when it is actually added.
-pub fn fetch_macos_word(word: &str) -> Result<Vec<VocabEntry>, String> {
-    let clean_word = normalize_text(word);
-    if clean_word.is_empty() {
-        return Err("Enter a word to look up".into());
-    }
-
-    let entries = fetch_from_macos_dictionary(&clean_word)?;
-    if entries.is_empty() {
-        return Err(format!(
-            "no {MACOS_DICTIONARY_NAME} entry for '{clean_word}'"
-        ));
-    }
-
-    Ok(truncate_entries(entries))
-}
-
 /// Parses Oxford entries as Dictionary.app renders them, one HTML document per
 /// homograph ("bank" the river side and "bank" the business are two).
 ///

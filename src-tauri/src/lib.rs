@@ -1535,8 +1535,9 @@ struct WordPreview {
     word: String,
     /// Already in the vocabulary, so adding it would be refused as a duplicate.
     saved: bool,
-    /// `saved` read the vocabulary, `macos` the installed dictionary, and `none`
-    /// has no entry at all.
+    /// `saved` read the vocabulary, `macos` the installed dictionary,
+    /// `cambridge` and `dictionaryapi` the online sources, and `none` found no
+    /// entry at all.
     source: String,
     definitions: Vec<PreviewDefinition>,
     /// Definitions the entry has, which can be more than are shown.
@@ -1550,9 +1551,9 @@ struct WordPreview {
 ///
 /// A saved word is read from the database, so the pane shows exactly what the
 /// user already has and the list doubles as a duplicate warning. Anything else
-/// comes from the dictionary installed with macOS alone: moving through the list
-/// must never touch the network, and `add_vocab_word` still falls back to
-/// Cambridge when the word is actually added.
+/// is fetched the way `add_vocab_word` fetches it, the installed dictionary
+/// first and Cambridge after, so the pane answers for the words Oxford lacks
+/// too. Nothing is written: a preview must not change the vocabulary.
 ///
 /// Async and moved to a worker for the same reason as `lac_viet_meaning`: the
 /// dictionary bridge finishes its work on the main queue.
@@ -1575,15 +1576,16 @@ async fn preview_word(
     }
 
     let lookup = word.clone();
-    let entries =
-        tauri::async_runtime::spawn_blocking(move || dictionary::fetch_macos_word(&lookup))
-            .await
-            .map_err(|err| format!("Dictionary task failed: {err}"))?;
+    let fetched = tauri::async_runtime::spawn_blocking(move || dictionary::fetch_word(&lookup))
+        .await
+        .map_err(|err| format!("Dictionary task failed: {err}"))?;
 
-    // A word the installed dictionary does not carry is not an error here: the
-    // pane says so and the word can still be added from Cambridge.
-    Ok(match entries {
-        Ok(entries) => preview_from_entries(word, entries, false, None),
+    // A word none of the sources carries is not an error here either: the pane
+    // says so, and adding it reports the failure in the field's own status line.
+    Ok(match fetched {
+        Ok(fetched) => {
+            preview_from_entries(word, fetched.entries, false, None, fetched.source.as_str())
+        }
         Err(_) => WordPreview {
             word,
             saved: false,
@@ -1622,6 +1624,7 @@ fn saved_word_preview(conn: &Connection, word: &str) -> Result<Option<WordPrevie
         entries,
         true,
         definition_vi,
+        "saved",
     )))
 }
 
@@ -1632,6 +1635,7 @@ fn preview_from_entries(
     entries: Vec<VocabEntry>,
     saved: bool,
     definition_vi: Option<String>,
+    source: &str,
 ) -> WordPreview {
     let mut definitions = Vec::new();
     for entry in &entries {
@@ -1654,11 +1658,7 @@ fn preview_from_entries(
     WordPreview {
         word,
         saved,
-        source: if saved {
-            "saved".into()
-        } else {
-            "macos".into()
-        },
+        source: source.to_string(),
         definitions,
         total: count_definitions(&entries),
         definition_vi,
@@ -2644,7 +2644,7 @@ mod tests {
     /// entry so it can say how much is left for the popup.
     #[test]
     fn the_preview_flattens_the_tree_it_is_given() {
-        let preview = preview_from_entries("run".into(), sample_entries(), false, None);
+        let preview = preview_from_entries("run".into(), sample_entries(), false, None, "macos");
 
         assert!(!preview.saved);
         assert_eq!(preview.source, "macos");

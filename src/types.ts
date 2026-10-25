@@ -111,7 +111,7 @@ export interface PreviewDefinition {
 export interface WordPreview {
   word: string;
   saved: boolean;
-  source: 'saved' | 'macos' | 'none';
+  source: 'saved' | 'macos' | 'cambridge' | 'dictionaryapi' | 'none';
   definitions: PreviewDefinition[];
   /** Definitions the entry has, which can be more than are shown. */
   total: number;

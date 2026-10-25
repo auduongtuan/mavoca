@@ -8,7 +8,7 @@ import { PreviewDefinition, VocabWord, WordPreview, WordSuggestion } from '../ty
 /** One lookup per pause in typing, not one per keystroke. */
 const SUGGEST_DEBOUNCE_MS = 180;
 /** The pane follows the arrow keys, so its lookup waits for a moment's rest. */
-const PREVIEW_DEBOUNCE_MS = 80;
+const PREVIEW_DEBOUNCE_MS = 120;
 /** Below two letters every list is noise. */
 const MIN_PREFIX_LEN = 2;
 
@@ -24,14 +24,23 @@ const pronunciationsOf = (definition: PreviewDefinition): string[] => {
   return parts;
 };
 
+/** Where a previewed meaning came from, when saying so is worth the room. */
+const SOURCE_LABELS: Record<string, string> = {
+  saved: 'Saved',
+  cambridge: 'Cambridge',
+  dictionaryapi: 'Dictionary API',
+};
+
 /**
  * The window the add-word shortcut opens. Only the word is typed; Rust fetches
  * every meaning on save, then the meaning popup shows the new word.
  *
  * Typing offers completions from the saved words and from the system word list,
- * and the highlighted completion shows its meaning beside the list as it moves.
- * Each lookup is debounced and its answer dropped if the word has moved on, so
- * typing never waits on a query it has already made obsolete.
+ * and the first completion is highlighted as soon as the list opens, so its
+ * meaning shows beside the list without anything else being pressed. The pane
+ * follows the highlight with one debounced lookup per word, answered from the
+ * vocabulary, the dictionary installed with macOS, or the online sources behind
+ * it, and dropped if the highlight has moved on.
  *
  * The list is a Base UI autocomplete in `inline` mode: the window is sized from
  * the content it measures, so a list that floated above the window could not be
@@ -210,11 +219,19 @@ export const QuickAdd: React.FC = () => {
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
-      // A highlighted suggestion is taken by the list's own item handler; Enter
-      // in the field itself adds what was typed.
-      if (!highlighted) {
+      // Enter always adds what the field holds: the list carries a highlight from
+      // the moment it opens, so letting the list take Enter would add a word that
+      // was never typed.
+      event.preventDefault();
+      event.stopPropagation();
+      void add();
+    } else if (event.key === 'Tab' && !event.shiftKey) {
+      // Tab is the keyboard's way to take the highlighted suggestion.
+      const suggestion = suggestions.find((candidate) => candidate.word === highlighted);
+      if (suggestion) {
         event.preventDefault();
-        void add();
+        event.stopPropagation();
+        accept(suggestion);
       }
     } else if (event.key === 'Escape') {
       event.preventDefault();
@@ -250,6 +267,10 @@ export const QuickAdd: React.FC = () => {
         filter={null}
         inline
         open={listOpen}
+        // The pane is the point of the list, so the first completion is described
+        // before anything is pressed and stays highlighted as the word changes.
+        autoHighlight="always"
+        keepHighlight
         itemToStringValue={(suggestion: WordSuggestion) => suggestion.word}
         onItemHighlighted={(suggestion) => setHighlighted(suggestion?.word ?? null)}
       >
@@ -291,20 +312,22 @@ export const QuickAdd: React.FC = () => {
               </Autocomplete.List>
             )}
             <p className={error ? 'quick-add-status error' : 'quick-add-status'}>
-              {error ?? (busy ? 'Looking up meanings…' : 'Enter to add · Esc to close')}
+              {error ?? (busy ? 'Looking up meanings…' : 'Enter to add · Tab to complete · Esc to close')}
             </p>
           </div>
           {highlighted && (
             <aside className="quick-add-preview">
               <header className="preview-head">
                 <span className="preview-word">{highlighted}</span>
-                {current?.saved && <span className="suggestion-tag">Saved</span>}
+                {current && SOURCE_LABELS[current.source] && (
+                  <span className="suggestion-tag">{SOURCE_LABELS[current.source]}</span>
+                )}
               </header>
               {!current && <p className="preview-note">Looking up…</p>}
               {current && !first && (
                 <p className="preview-note">
                   {current.source === 'none'
-                    ? 'Not in the macOS dictionary. Cambridge is tried when you add it.'
+                    ? 'Neither the macOS dictionary nor Cambridge has an entry.'
                     : 'No definitions stored for this word.'}
                 </p>
               )}

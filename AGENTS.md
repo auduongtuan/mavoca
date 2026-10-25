@@ -211,10 +211,16 @@ from `/usr/share/dict/words`, the list macOS uses for Look Up and spell checking
   otherwise remember the height of a list that is gone. `.quick-add` keeps the
   field at the top of the window rather than centring it, so only the list gains
   room and nothing on screen moves.
-- Keys: ↓/↑ choose, Enter on a chosen row fills the field, Enter with nothing
-  chosen adds the word, Tab completes, Esc closes the list and only closes the
-  window when the list is already closed. Clicking a row takes it, and
-  `preventDefault` on `mousedown` is what keeps the focus in the field.
+- Keys: ↓/↑ choose, Enter adds the word in the field, Tab completes the
+  highlighted row, Esc closes the list and only closes the window when the list
+  is already closed. Clicking a row takes it, and `preventDefault` on `mousedown`
+  is what keeps the focus in the field.
+- Enter always adds what the field holds, even with a row highlighted, because
+  the list now carries a highlight from the moment it opens
+  (`autoHighlight="always"`, with `keepHighlight` so a pointer passing over does
+  not drop it). The doc recommends `'always'` for a list rendered inline; here it
+  is also what gives the pane something to show without pressing ↓ first. Tab is
+  therefore the only keyboard way to take a suggestion.
 - The list is Base UI's `Autocomplete`, in `inline` mode with `filter={null}`:
   Rust has already filtered against the whole system word list, and the window is
   sized from the content it measures, so a popup that floated above the window
@@ -222,16 +228,22 @@ from `/usr/share/dict/words`, the list macOS uses for Look Up and spell checking
 
 ### Preview
 
-The word under the arrow keys shows its meaning beside the list, so the field
-never has to be given up to answer "what does this mean?".
+The highlighted suggestion shows its meaning beside the list, so the field never
+has to be given up to answer "what does this mean?".
 
 - `preview_word` answers from the saved vocabulary first, through the database, so
-  what it shows is exactly what the popup will show, translation included. If the
-  word is not saved it asks the macOS (Oxford) dictionary, which is local and
-  instant.
-- It never touches the network. A word Oxford does not have previews as
-  `source: "none"` and says Cambridge is tried when it is added, because
-  `add_vocab_word` still falls back to Cambridge and then the API.
+  what it shows is exactly what the popup will show, translation included. Any
+  other word goes through `dictionary::fetch_word`, the same order
+  `add_vocab_word` uses: macOS (Oxford), then Cambridge, then the dictionary API.
+- So the pane can make a request: a word Oxford has never seen — `griff`, most
+  names and most new words — is looked up online rather than answered with "not
+  in the dictionary". Only a word none of the three sources carries previews as
+  `source: "none"`. Nothing is written; a preview is a read.
+- Because that can cost a second, the pane keeps the meaning it already has
+  while the next one loads, its lookup is debounced (`PREVIEW_DEBOUNCE_MS`), and
+  each word's answer is cached for the opening, so stepping down the list does
+  not send a request per row. The header names a source the user would not
+  expect it from: `Saved`, `Cambridge`, `Dictionary API`.
 - The pane shows `PREVIEW_DEFINITIONS` (4) definitions with their guide words and
   part of speech, and `total` behind them for "N more definitions when added".
   `VocabCard` is where the whole tree is read.
@@ -240,10 +252,7 @@ never has to be given up to answer "what does this mean?".
   `QUICK_ADD_WIDTH..QUICK_ADD_MAX_WIDTH` (420..780). `QuickAdd.tsx` measures both
   from `.quick-add-content`, which is `width: max-content` so it reports the room
   the columns need rather than the width of the window, and hides the pane again
-  when nothing is highlighted, closing back to 420.
-- The meanings of a word are looked up once per opening: `QuickAdd.tsx` caches
-  them by word, and the lookup is debounced, so stepping down the list does not
-  send a request per row.
+  when the list closes, back to 420.
 
 ## Backup Behavior
 
