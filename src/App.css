@@ -1117,7 +1117,11 @@ html, body {
      moving. */
   height: 100vh;
   padding: 22px 20px 18px;
-  overflow: hidden;
+  /* Not `hidden`: the pane has a fixed cap, so on a screen too short for
+     `QUICK_ADD_MAX_HEIGHT` the window clamp in Rust can leave part of it below
+     the window. Scrolling the window then loses nothing, and macOS draws the
+     scrollbar only while scrolling, so nothing appears in the usual case. */
+  overflow: hidden auto;
   background: transparent;
 }
 
@@ -1213,9 +1217,12 @@ html, body {
   color: #37352f;
   /* The window stops growing at `QUICK_ADD_MAX_HEIGHT`, so a word with long
      definitions and a Lạc Việt entry scrolls here instead of losing its last
-     sense off the bottom. The cap is the padding box, which keeps the measured
-     content height stable once the window is at that height. */
-  max-height: calc(100vh - 40px);
+     sense off the bottom. The number is fixed rather than tied to the window
+     height on purpose: a cap like `calc(100vh - 40px)` measures against the
+     window as it is now, so the content can never report itself taller than the
+     window and the window can never grow. It is `QUICK_ADD_MAX_HEIGHT` minus
+     the window's 40px of padding. */
+  max-height: 600px;
   overflow: hidden auto;
 }
 

@@ -269,6 +269,17 @@ has to be given up to answer "what does this mean?".
   from `.quick-add-content`, which is `width: max-content` so it reports the room
   the columns need rather than the width of the window, and hides the pane again
   when the list closes, back to 420.
+- The window grows to fit the meaning, not the list: `QUICK_ADD_MAX_HEIGHT` is
+  640, the room four definitions and the Lạc Việt entry under them need, and the
+  height is clamped to the room left on screen below the window's own top edge
+  (`QUICK_ADD_SCREEN_MARGIN`), the same clamp `resize_popup` makes. A screen too
+  short for that scrolls `.quick-add` rather than cutting the entry off.
+- `.quick-add-preview` caps itself at a **fixed** `max-height: 600px` — the 640
+  less the window's 40px of padding — and never at `calc(100vh - …)`. A
+  viewport-sized cap measures against the window as it is now, so the content
+  can never report itself taller than the window and the window can never grow;
+  that deadlock is why the number is fixed. The pane is what the window is sized
+  from, so a list has never been enough to size it.
 
 ## Backup Behavior
 

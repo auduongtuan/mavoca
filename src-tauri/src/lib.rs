@@ -37,7 +37,13 @@ const QUICK_ADD_HEIGHT: f64 = 94.0;
 /// The quick-add window widens by this much while it shows a meaning beside the
 /// list, and no further than that.
 const QUICK_ADD_MAX_WIDTH: f64 = 780.0;
-const QUICK_ADD_MAX_HEIGHT: f64 = 420.0;
+/// Tall enough for the meaning pane rather than for the list: four definitions
+/// and the Lạc Việt entry under them is about 640, which is what the window is
+/// for. The pane's own `max-height` is the same number less the window's
+/// padding, and it scrolls, so an entry longer than that still reads instead of
+/// being cut off.
+const QUICK_ADD_MAX_HEIGHT: f64 = 640.0;
+const QUICK_ADD_SCREEN_MARGIN: f64 = 12.0;
 /// Definitions the add-word preview shows before it counts the rest.
 const PREVIEW_DEFINITIONS: usize = 4;
 
@@ -2062,9 +2068,22 @@ fn resize_quick_add_window(app: tauri::AppHandle, width: f64, height: f64) -> Re
 
     // The frontend measures its own content, which can be the meaning pane as
     // well as the list; the clamps only stop a bad measurement from escaping the
-    // screen.
+    // screen. The window grows down from where it was opened, so the room left
+    // below its top edge is the real ceiling: a short screen keeps the last
+    // lines of a long entry visible where a fixed 640 would push them off it.
+    let mut max_height = QUICK_ADD_MAX_HEIGHT;
+    if let (Ok(Some(monitor)), Ok(position)) = (window.current_monitor(), window.outer_position()) {
+        let scale_factor = monitor.scale_factor();
+        let screen_bottom =
+            (monitor.position().y as f64 + monitor.size().height as f64) / scale_factor;
+        let room = screen_bottom - position.y as f64 / scale_factor - QUICK_ADD_SCREEN_MARGIN;
+        max_height = max_height.min(room);
+    }
+
     let width = width.clamp(QUICK_ADD_WIDTH, QUICK_ADD_MAX_WIDTH);
-    let height = height.clamp(QUICK_ADD_HEIGHT, QUICK_ADD_MAX_HEIGHT);
+    let height = height
+        .max(QUICK_ADD_HEIGHT)
+        .min(max_height.max(QUICK_ADD_HEIGHT));
     window
         .set_size(tauri::LogicalSize::new(width, height))
         .map_err(|err| format!("Failed to resize the add word window: {err}"))
