@@ -106,28 +106,57 @@ struct LacVietGroup {
 /// does not have. The definition is also stored with its row by the caller, so
 /// a card is translated once rather than once per view.
 pub fn translate_text(text: &str) -> Result<String, String> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Ok(String::new());
-    }
+    let texts = [text.to_string()];
+    Ok(translate_texts(&texts)?.pop().unwrap_or_default())
+}
+
+/// Translates several texts, in order, reusing anything already in the cache.
+///
+/// Everything missing goes through in **one** session: a card's examples are a
+/// batch, and opening a session per example would cost a round trip each. As in
+/// `translate_text` the cache lock is held across the call, so overlapping
+/// callers wait for the first rather than translating the same text twice.
+pub fn translate_texts(texts: &[String]) -> Result<Vec<String>, String> {
+    let trimmed: Vec<String> = texts.iter().map(|text| text.trim().to_string()).collect();
 
     let mut cache = translation_cache();
-    if let Some(cached) = cache.get(text) {
-        return Ok(cached.clone());
+
+    let mut pending: Vec<String> = Vec::new();
+    for text in &trimmed {
+        if !text.is_empty() && !cache.contains_key(text) && !pending.contains(text) {
+            pending.push(text.clone());
+        }
     }
 
-    let translated = translate_to_vietnamese(&[text.to_string()])?
-        .pop()
-        .ok_or_else(|| "Translation returned an unexpected result".to_string())?;
-    // An empty result is a failure, not a translation: leave it out so the next
-    // call tries again.
-    if !translated.is_empty() {
-        if cache.len() >= MAX_CACHED_TRANSLATIONS {
-            cache.clear();
+    let mut fresh: HashMap<String, String> = HashMap::new();
+    if !pending.is_empty() {
+        for (text, translated) in pending
+            .iter()
+            .zip(translate_to_vietnamese(&pending)?)
+            // An empty result is a failure, not a translation: leave it out so
+            // the next call tries again.
+            .filter(|(_, translated)| !translated.is_empty())
+        {
+            if cache.len() >= MAX_CACHED_TRANSLATIONS {
+                cache.clear();
+            }
+            cache.insert(text.clone(), translated.clone());
+            fresh.insert(text.clone(), translated);
         }
-        cache.insert(text.to_string(), translated.clone());
     }
-    Ok(translated)
+
+    // `fresh` first: a cache that filled up mid-batch may have dropped an entry
+    // this very call produced.
+    Ok(trimmed
+        .iter()
+        .map(|text| {
+            fresh
+                .get(text)
+                .or_else(|| cache.get(text))
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect())
 }
 
 /// Lạc Việt's entry for a card, or `None` when it does not have the word.

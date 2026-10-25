@@ -126,6 +126,9 @@ Tables:
   - `definition_vi TEXT NOT NULL DEFAULT ''` — the machine translation of
     `definition`, empty until it has been translated
   - `examples TEXT NOT NULL DEFAULT '[]'` — JSON array of strings
+  - `examples_vi TEXT NOT NULL DEFAULT '[]'` — JSON array of the machine
+    translations of `examples`, positionally matching it; empty until the VI
+    toggle has been pressed on the card
   - `sort_order INTEGER NOT NULL`
 - `settings`
   - `key TEXT PRIMARY KEY`
@@ -137,11 +140,16 @@ on consecutive `guide_word`. The schema does not enforce tree consistency;
 write goes through `save_word_tree`, which wraps the word row and its
 definitions in one transaction.
 
-`definition_vi` is a cache of a translation, not content: it belongs to the
-English text beside it, so `replace_word_definitions` copies the stored value
-across when the definition text is unchanged and leaves it empty otherwise.
-Nothing else in the tree round-trip carries it — the editor neither reads nor
-writes it. Lạc Việt's own senses are never stored; see Translation.
+`definition_vi` and `examples_vi` are caches of translations, not content: each
+belongs to the English text beside it, so `replace_word_definitions` copies the
+stored value across when that English is unchanged and leaves it empty
+otherwise. `CarriedTranslations` holds both across a replace, keyed by English
+text rather than by row id, because SQLite reuses the ids of the rows it just
+deleted. The definition is keyed on its own text; the examples are keyed on
+their **whole JSON array**, since the translations line up positionally and
+editing one example leaves the rest unmatchable by index. Nothing else in the
+tree round-trip carries either — the editor neither reads nor writes them. Lạc
+Việt's own senses are never stored; see Translation.
 
 `PRAGMA foreign_keys = ON` must be set on the connection or the cascade never
 fires and deleting a word leaves orphaned definitions behind.
@@ -152,12 +160,14 @@ the US pronunciation, `meaning` the single definition, and `example` its only
 example. The migration is transactional and idempotent.
 
 A column added later is handled separately, because `CREATE TABLE IF NOT EXISTS`
-leaves an existing table alone: `ensure_definition_vi_column` and
-`ensure_points_column` check `table_columns` and issue an `ALTER TABLE`, once
-per launch. Add columns that way rather than editing the `CREATE` alone, which
-only new databases would get. `ensure_points_column` runs *after*
-`migrate_legacy_vocabs`, not inside `create_schema`: that migration rebuilds
-`vocabs` from scratch, so a column added before it is only lost again. The
+leaves an existing table alone: `ensure_definition_vi_column`,
+`ensure_examples_vi_column`, and `ensure_points_column` check `table_columns`
+and issue an `ALTER TABLE`, once per launch. Add columns that way rather than editing the `CREATE` alone, which
+only new databases would get. The two `vocab_definitions` columns run inside
+`create_schema`, because `migrate_legacy_vocabs` *writes* definition rows and
+they have to exist by then. `ensure_points_column` runs the other way about,
+*after* that migration rather than inside `create_schema`: it rebuilds `vocabs`
+from scratch, so a column added before it is only lost again. The
 rebuild's own `CREATE TABLE vocabs_migrated` has to keep pace with the current
 `vocabs` shape for the same reason.
 
@@ -471,7 +481,16 @@ the definition stepper, and the Vietnamese entry below it does not follow it.
 They are separate on purpose. Lạc Việt numbers its senses its own way, merges
 homographs under one part of speech, and has no notion of the guide words
 Cambridge uses, so no sense it holds can be called the translation of the
-definition on screen. Examples stay in English.
+definition on screen.
+
+The examples are translated too, but only behind the VI toggle
+(`translate_examples`). The definition is translated eagerly because its
+translation is what orders the Lạc Việt senses; the examples order nothing, so
+translating them with every card would put sentences nobody has asked to read
+through the translator on every rotation tick. They go through one translator
+session for the whole list (`vietnamese::translate_texts`) rather than one
+round trip each, and a partial result is not stored — the next press should
+retry what failed rather than read back a gap.
 
 - `src-tauri/src/vietnamese.rs` implements both halves, and the popup asks for
   them separately: `lac_viet_meaning(word, part_of_speech, definition_id)` and
@@ -504,7 +523,8 @@ definition on screen. Examples stay in English.
 - Phrasal verbs are not special-cased for Lạc Việt: a card whose part of speech
   is `phrasal verb` matches on the `verb` it contains.
 - The translated definition is **stored**, in `vocab_definitions.definition_vi`,
-  so a card is translated once per definition. Lạc Việt's senses are **not**
+  and the translated examples in `examples_vi` beside it, so each is translated
+  once ever. Lạc Việt's senses are **not**
   stored: Từ điển Lạc Việt is licensed, its text does not line up with the rows,
   and `VACUUM INTO` copies the whole database into Dropbox. Only machine output
   for our own English text is written.
@@ -531,7 +551,9 @@ definition on screen. Examples stay in English.
 - `App.tsx` keys `VocabCard` by card, so a new card starts untranslated.
   `VocabCard` keeps a session cache keyed by word, part of speech, and
   definition, so stepping through a word's definitions keeps the translation it
-  already fetched instead of blanking until Rust answers again.
+  already fetched instead of blanking until Rust answers again. The examples
+  have a second cache beside it, keyed on the examples themselves rather than
+  on the card, for the positional reason above.
 - The translation is fetched as soon as the card is visible, not when VI is
   pressed: it is what orders the Lạc Việt senses, and it is stored once. Cards
   mounted while the popup is hidden are skipped, so the rotation does not
@@ -673,13 +695,26 @@ Mavoca is a menu bar extra, not an app in the Dock.
 - Keep the popup compact and transparent/vibrancy-friendly.
 - The popup window is 320px wide. Judge a card layout at that width, not in a
   wide browser window: a row that fits at 1000px wraps in the real popup.
-- The card header changes as one unit. The ‹ `1 of 3` › stepper sits on the
-  word's line, and the part-of-speech badge with the pronunciation row sits
-  under it, because a step replaces all of them: the badge and the
-  transcription belong to the definition on screen, not to the word.
-  `--meta-btn-size` is now the VI toggle's own height, kept on `.vocab-card`
-  beside the icon-button paddings; the stepper's carets are `IconButton`
-  `small`, which comes out at the same 20px without being told to.
+- The card header changes as one unit: `.word-line` carries the word and the
+  part-of-speech badge inline beside it, the ‹ `1 of 3` › stepper closes that
+  row, and `.word-pronunciation` sits under it. A step replaces all of them,
+  because the badge and the transcription belong to the definition on screen,
+  not to the word. The line wraps, so a long word drops the badge rather than
+  pushing it off the 320px card.
+- The VI toggle sits on the English section's heading, in `.section-header`,
+  because that is the section it changes — it adds the Vietnamese under the
+  definition and its examples. Give any future section control the same
+  treatment rather than a row of its own.
+- `--meta-btn-size` (20px, on `.vocab-card` beside the icon-button paddings) is
+  the height of the VI toggle and the `.category` badge, which share it along
+  with their 10px type and `0 6px` padding even though they no longer sit on
+  one line. The badge keeps the lighter weight — it is a label, not a control.
+  `.section-header` takes its `min-height` from the same variable, so a
+  heading with a control is as tall as the control and the label is centred
+  against it. The stepper's carets are `IconButton` `small`, which arrives at
+  the same 20px on its own.
+- `.card-meta` is left holding only the guide word, and is not rendered at all
+  when the card has none: an empty row would still spend the card's gap.
 - The pronunciation row (`.word-pronunciation`) shows the card's `pronUk` and
   `pronUs` as accent-labelled chips, each with its own speak button so each is
   read in its own accent. Equal values collapse to a single chip, and a word
@@ -691,6 +726,16 @@ Mavoca is a menu bar extra, not an app in the Dock.
   English and Tiếng Việt, divided by a hairline. A step replaces the English
   section and leaves the Vietnamese one in place: it is the entry's meaning,
   not the definition's, so it must not move with the stepper.
+- The examples sit **inside** the English section, under the definition they
+  illustrate, with a quieter `.section-sublabel` rather than a second
+  `.section-label` — two identical headings in one section would read as two
+  sections. They step with the definition, which is why they are nested rather
+  than divided off below. Space separates them, not a hairline; a hairline
+  inside a section claims to end it.
+- The definitions and the Lạc Việt senses are all 14px/1.6 — the card's body
+  text is one size. The translated definition simply inherits `.meaning p`.
+  Dropping the Vietnamese a size below the English made it read as a footnote
+  to the English rather than as the same sentence.
 - A Lạc Việt sense is shown as a bulleted `.sense` with its headline in bold and
   the explanation after it, three at a time under a `+N more` toggle
   (`SENSES_SHOWN`). Only the first sense is filled in, and only when the

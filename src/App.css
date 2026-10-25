@@ -124,18 +124,11 @@ html, body {
   flex-shrink: 0;
 }
 
-.word-entry {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-}
-
 .word-line {
   display: flex;
   align-items: center;
-  /* Word to speaker glyph; the button's padding cancels out. */
+  flex-wrap: wrap;
+  /* Word to badge, and to the speaker glyph whose padding cancels out. */
   gap: 10px;
   min-width: 0;
 }
@@ -193,16 +186,23 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Shares the VI toggle's metrics: the two sit on the same line, so the same
+   height, type size and padding, from the same `--meta-btn-size`. The weight
+   stays lighter — the badge is a label, the toggle is a control. */
 .category {
+  display: inline-flex;
+  align-items: center;
+  height: var(--meta-btn-size);
   background: rgba(255, 255, 255, 0.15);
   color: rgba(255, 255, 255, 0.9);
-  padding: 3px 8px;
-  border-radius: 4px;
+  padding: 0 6px;
+  border-radius: 5px;
   font-size: 10px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   border: 1px solid rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
   white-space: nowrap;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -235,7 +235,6 @@ html, body {
 .card-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   min-height: 14px;
 }
@@ -262,16 +261,21 @@ html, body {
   gap: 9px;
 }
 
-.card-meta-end {
+/* A section heading with its own control at the right-hand end. The row is as
+   tall as that control, so the label is centred against it rather than sitting
+   on its own 10px line. */
+.section-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  margin-left: auto;
+  min-height: var(--meta-btn-size);
 }
 
 .translate-btn {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 3px;
   height: var(--meta-btn-size);
   padding: 0 6px;
@@ -304,8 +308,6 @@ html, body {
 .vocab-card .translation {
   margin-top: 4px;
   color: rgba(55, 53, 47, 0.72);
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 /* Lạc Việt's meaning, shown on every card that has one. */
@@ -379,12 +381,14 @@ html, body {
   list-style: none;
 }
 
+/* The same size as the definitions: this is the card's Vietnamese body text,
+   and a step down from the English would read as a footnote to it. */
 .sense {
   position: relative;
   padding-left: 11px;
   color: rgba(55, 53, 47, 0.72);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .sense::before {
@@ -427,9 +431,23 @@ html, body {
   color: #37352f;
 }
 
+/* Nested inside the English section rather than divided off from it: the
+   examples illustrate the definition above them and step with it. The space
+   does the separating now, since a hairline inside a section would read as
+   another section. */
 .example {
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  padding-top: 12px;
+  margin-top: 6px;
+}
+
+/* Quieter than `.section-label`, which names the section this sits inside:
+   two identical labels stacked would read as two sections. */
+.section-sublabel {
+  margin-bottom: 2px;
+  color: rgba(55, 53, 47, 0.55);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .example-text {
@@ -437,6 +455,20 @@ html, body {
   color: #37352f;
   font-size: 13px;
   line-height: 1.5;
+}
+
+/* Under the sentence it translates, matching `.translation` under the
+   definition: the same step down in weight, and upright, so the English
+   stays the one in quotes. */
+.example-translation {
+  margin-top: 2px;
+  color: rgba(55, 53, 47, 0.72);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.example-translation + .example-text {
+  margin-top: 8px;
 }
 
 .controls {
@@ -1613,6 +1645,14 @@ html, body {
 
   .example-text {
     color: #ffffff;
+  }
+
+  .section-sublabel {
+    color: rgba(255, 255, 255, 0.62);
+  }
+
+  .example-translation {
+    color: rgba(227, 226, 224, 0.72);
   }
 
   .icon-btn {

@@ -98,6 +98,15 @@ const MAX_CACHED_TRANSLATIONS = 200;
 const translationKey = (card: VocabCardData) =>
   `${card.word}\u0000${card.partOfSpeech}\u0000${card.definition}`;
 
+/**
+ * The same, for the card's examples. Keyed on the examples themselves rather
+ * than on the card, because the translations line up with them positionally:
+ * an edited list must not read back the previous one's translations.
+ */
+const exampleTranslationCache = new Map<string, string[]>();
+
+const exampleKey = (card: VocabCardData) => card.examples.join('\u0000');
+
 /** Senses shown before the section has to be expanded. */
 const SENSES_SHOWN = 3;
 
@@ -138,6 +147,9 @@ export const VocabCard: React.FC<VocabCardProps> = ({
     () => translationCache.get(cardKey) ?? '',
   );
   const [wordVi, setWordVi] = useState('');
+  const [examplesVi, setExamplesVi] = useState<string[]>(
+    () => exampleTranslationCache.get(exampleKey(card)) ?? [],
+  );
   const [showTranslation, setShowTranslation] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [translateError, setTranslateError] = useState<string | null>(null);
@@ -203,6 +215,40 @@ export const VocabCard: React.FC<VocabCardProps> = ({
     }
   }, [cardKey, card.definition, card.definitionId, loadLacViet]);
 
+  // Lazy, unlike the definition: the examples order nothing, so they are
+  // translated when VI is pressed rather than when the card appears. Rust
+  // stores them with the definition, so this costs the translator once ever.
+  const loadExampleTranslations = useCallback(async () => {
+    if (card.examples.length === 0) {
+      return;
+    }
+
+    const key = exampleKey(card);
+    const cached = exampleTranslationCache.get(key);
+    if (cached) {
+      setExamplesVi(cached);
+      return;
+    }
+
+    try {
+      const result = await invoke<string[]>('translate_examples', {
+        examples: card.examples,
+        definitionId: card.definitionId,
+      });
+      setExamplesVi(result);
+      if (result.some((text) => text)) {
+        if (exampleTranslationCache.size >= MAX_CACHED_TRANSLATIONS) {
+          exampleTranslationCache.clear();
+        }
+        exampleTranslationCache.set(key, result);
+      }
+    } catch (err) {
+      // The definition's own status line already carries the translator's
+      // complaint; a second copy of it under the examples says nothing new.
+      setTranslateError(err instanceof Error ? err.message : String(err));
+    }
+  }, [card]);
+
   // Takes the word through the translator, for the case where Lạc Việt has no
   // entry and the VI button is all there is to show.
   const loadWordTranslation = useCallback(async () => {
@@ -242,6 +288,9 @@ export const VocabCard: React.FC<VocabCardProps> = ({
     const shown = !showTranslation;
     setShowTranslation(shown);
     void loadTranslation();
+    if (shown) {
+      void loadExampleTranslations();
+    }
     // Nothing from Lạc Việt to show: the word itself is the only Vietnamese
     // there is, and it costs a second translation, so only on request.
     if (shown && lacViet === null && !wordVi) {
@@ -259,6 +308,13 @@ export const VocabCard: React.FC<VocabCardProps> = ({
         <div className="word-header-top">
           <div className="word-line">
             <h1 className="word">{card.word}</h1>
+            <span
+              className="category"
+              data-pos={normalizePartOfSpeech(card.partOfSpeech).replace(/\s+/g, '-')}
+              title={card.partOfSpeech}
+            >
+              {abbreviatePartOfSpeech(card.partOfSpeech)}
+            </span>
             {canSpeak && pronunciations.length === 0 && (
               <IconButton
                 size="small"
@@ -269,9 +325,9 @@ export const VocabCard: React.FC<VocabCardProps> = ({
               </IconButton>
             )}
           </div>
-          {/* Above the part of speech and the transcription, which it changes:
-              stepping the definitions steps the entry, not only the text below
-              the divider. */}
+          {/* Beside the word, the part of speech, and the transcription below,
+              all of which it changes: stepping the definitions steps the whole
+              entry, not only the text below the divider. */}
           {card.total > 1 && (
             <div className="meaning-stepper">
               <IconButton size="small" onClick={onPreviousMeaning} label="Previous meaning">
@@ -286,53 +342,36 @@ export const VocabCard: React.FC<VocabCardProps> = ({
             </div>
           )}
         </div>
-        <div className="word-entry">
-          <span
-            className="category"
-            data-pos={normalizePartOfSpeech(card.partOfSpeech).replace(/\s+/g, '-')}
-            title={card.partOfSpeech}
-          >
-            {abbreviatePartOfSpeech(card.partOfSpeech)}
-          </span>
-          {pronunciations.length > 0 && (
-            <p className="word-pronunciation">
-              {pronunciations.map(({ accent, ipa, lang }) => (
-                <span className="pronunciation" key={accent}>
-                  {pronunciations.length > 1 && (
-                    <span className="pronunciation-accent">{accent}</span>
-                  )}
-                  <span className="pronunciation-ipa">{ipa}</span>
-                  {canSpeak && (
-                    <IconButton
-                      size="small"
-                      onClick={() => speakWord(card.word, lang)}
-                      label={`Pronounce ${card.word} in ${accent} English`}
-                    >
-                      <SpeakerHigh size={12} weight="bold" aria-hidden />
-                    </IconButton>
-                  )}
-                </span>
-              ))}
-            </p>
-          )}
-        </div>
+        {pronunciations.length > 0 && (
+          <p className="word-pronunciation">
+            {pronunciations.map(({ accent, ipa, lang }) => (
+              <span className="pronunciation" key={accent}>
+                {pronunciations.length > 1 && (
+                  <span className="pronunciation-accent">{accent}</span>
+                )}
+                <span className="pronunciation-ipa">{ipa}</span>
+                {canSpeak && (
+                  <IconButton
+                    size="small"
+                    onClick={() => speakWord(card.word, lang)}
+                    label={`Pronounce ${card.word} in ${accent} English`}
+                  >
+                    <SpeakerHigh size={12} weight="bold" aria-hidden />
+                  </IconButton>
+                )}
+              </span>
+            ))}
+          </p>
+        )}
       </div>
 
-      <div className="card-meta">
-        <button
-          onClick={toggleTranslation}
-          className={showTranslation ? 'translate-btn active' : 'translate-btn'}
-          title={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese on this Mac'}
-          aria-label={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese'}
-          aria-pressed={showTranslation}
-        >
-          <Translate size={12} weight="bold" aria-hidden />
-          VI
-        </button>
-        <div className="card-meta-end">
-          {card.guideWord && <span className="guide-word">{card.guideWord}</span>}
+      {/* Only the guide word is left here, and not every card has one: an
+          empty row would still spend the card's gap. */}
+      {card.guideWord && (
+        <div className="card-meta">
+          <span className="guide-word">{card.guideWord}</span>
         </div>
-      </div>
+      )}
 
       <div className="meaning">
         {/* Two sections rather than one block: the definition follows the
@@ -340,7 +379,21 @@ export const VocabCard: React.FC<VocabCardProps> = ({
             its own way and merges homographs under one part of speech, so a
             sense belongs to the word's entry, not to the definition on screen. */}
         <section className="card-section">
-          <h2 className="section-label">English</h2>
+          {/* VI sits on this heading because this is the section it changes:
+              it adds the Vietnamese under the definition and its examples. */}
+          <div className="section-header">
+            <h2 className="section-label">English</h2>
+            <button
+              onClick={toggleTranslation}
+              className={showTranslation ? 'translate-btn active' : 'translate-btn'}
+              title={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese on this Mac'}
+              aria-label={showTranslation ? 'Hide the Vietnamese definition' : 'Translate the definition to Vietnamese'}
+              aria-pressed={showTranslation}
+            >
+              <Translate size={12} weight="bold" aria-hidden />
+              VI
+            </button>
+          </div>
           <p>{card.definition}</p>
           {showTranslation && definitionVi && (
             <p className="translation">{definitionVi}</p>
@@ -350,6 +403,22 @@ export const VocabCard: React.FC<VocabCardProps> = ({
           )}
           {showTranslation && translateError && (
             <p className="translation-status error">{translateError}</p>
+          )}
+          {/* The examples belong to the definition above them, so they live
+              inside the English section and are replaced along with it when
+              the stepper moves. */}
+          {card.examples.length > 0 && (
+            <div className="example">
+              <h3 className="section-sublabel">Example</h3>
+              {card.examples.map((example, index) => (
+                <React.Fragment key={index}>
+                  <p className="example-text">"{example}"</p>
+                  {showTranslation && examplesVi[index] && (
+                    <p className="example-translation">{examplesVi[index]}</p>
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
           )}
         </section>
 
@@ -395,15 +464,6 @@ export const VocabCard: React.FC<VocabCardProps> = ({
           )
         )}
       </div>
-
-      {card.examples.length > 0 && (
-        <div className="example">
-          <h2 className="section-label">Example</h2>
-          {card.examples.map((example, index) => (
-            <p className="example-text" key={index}>"{example}"</p>
-          ))}
-        </div>
-      )}
 
       {/* Moving around the vocabulary is on the left and stays quiet; the one
           thing that changes something is on the right. The way out to the
