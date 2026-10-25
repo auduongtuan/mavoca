@@ -1,115 +1,115 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { VocabWord } from '../types';
+import { VocabCardData } from '../types';
 
+/**
+ * The popup shows one definition at a time. Rust owns the flattened rotation
+ * list and the current position, so stepping is a command rather than index
+ * math here — that keeps the tray title, auto-rotation, and the popup in sync.
+ */
 export const useVocab = () => {
-  const [vocabList, setVocabList] = useState<VocabWord[]>([]);
-  const [currentWord, setCurrentWord] = useState<VocabWord | null>(null);
-  const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const [card, setCard] = useState<VocabCardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load vocab data on mount
-  useEffect(() => {
-    loadVocab();
-  }, []);
-
-  // Set up event listener for vocab changes
-  useEffect(() => {
-    const unlisten = listen<VocabWord>('vocab-changed', (event) => {
-      setCurrentWord(event.payload);
-      // Update current index based on the word received
-      const index = vocabList.findIndex(w => w.word === event.payload.word);
-      if (index !== -1) {
-        setCurrentIndex(index);
-      }
-    });
-
-    return () => {
-      unlisten.then(fn => fn());
-    };
-  }, [vocabList]);
-
-  const syncWithBackend = async (index: number) => {
-    try {
-      await invoke('update_current_word_index', { index });
-    } catch (err) {
-      console.error('Failed to sync with backend:', err);
-    }
-  };
-
-  const loadVocab = async () => {
+  const loadCard = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch('/vocab.json');
-      if (!response.ok) {
-        throw new Error('Failed to load vocabulary');
-      }
-      const data: VocabWord[] = await response.json();
-      setVocabList(data);
-
-      // Get current word from Rust backend
-      try {
-        const word = await invoke<VocabWord>('get_current_vocab_word');
-        if (word) {
-          setCurrentWord(word);
-          const index = data.findIndex(w => w.word === word.word);
-          if (index !== -1) {
-            setCurrentIndex(index);
-          }
-        }
-      } catch {
-        // Fallback to first word if backend call fails
-        if (data.length > 0) {
-          setCurrentWord(data[0]);
-          setCurrentIndex(0);
-        }
-      }
-
+      const current = await invoke<VocabCardData | null>('get_current_vocab_card');
+      setCard(current);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const getRandomWord = () => {
-    if (vocabList.length > 0) {
-      const randomIndex = Math.floor(Math.random() * vocabList.length);
-      setCurrentWord(vocabList[randomIndex]);
-      setCurrentIndex(randomIndex);
-      syncWithBackend(randomIndex);
-    }
-  };
+  useEffect(() => {
+    void loadCard();
+  }, [loadCard]);
 
-  const getNextWord = () => {
-    if (vocabList.length > 0) {
-      const nextIndex = (currentIndex + 1) % vocabList.length;
-      setCurrentWord(vocabList[nextIndex]);
-      setCurrentIndex(nextIndex);
-      syncWithBackend(nextIndex);
-    }
-  };
+  useEffect(() => {
+    const unlisten = listen<VocabCardData>('vocab-changed', (event) => {
+      setCard(event.payload);
+    });
 
-  const getPreviousWord = () => {
-    if (vocabList.length > 0) {
-      const prevIndex = currentIndex === 0 ? vocabList.length - 1 : currentIndex - 1;
-      setCurrentWord(vocabList[prevIndex]);
-      setCurrentIndex(prevIndex);
-      syncWithBackend(prevIndex);
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen('vocab-empty', () => {
+      setCard(null);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  const step = useCallback(async (delta: number) => {
+    try {
+      const next = await invoke<VocabCardData | null>('step_vocab_card', { delta });
+      if (next) {
+        setCard(next);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
-  };
+  }, []);
+
+  // The footer's arrows move between words, skipping the rest of the current
+  // word's definitions. Rust finds the word boundary, because it owns the list.
+  const stepWord = useCallback(async (direction: 1 | -1) => {
+    try {
+      const next = await invoke<VocabCardData | null>('step_vocab_word', { direction });
+      if (next) {
+        setCard(next);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const getNextWord = useCallback(() => void stepWord(1), [stepWord]);
+  const getPreviousWord = useCallback(() => void stepWord(-1), [stepWord]);
+
+  // A word's definitions sit next to each other in the rotation, so the card's
+  // own stepper moves one meaning at a time and wraps within the word.
+  const stepMeaning = useCallback((direction: 1 | -1) => {
+    if (!card || card.total < 2) {
+      return;
+    }
+    const atEdge = direction === 1 ? card.position === card.total : card.position === 1;
+    void step(atEdge ? -direction * (card.total - 1) : direction);
+  }, [card, step]);
+
+  const getNextMeaning = useCallback(() => stepMeaning(1), [stepMeaning]);
+  const getPreviousMeaning = useCallback(() => stepMeaning(-1), [stepMeaning]);
+
+  const getRandomWord = useCallback(async () => {
+    try {
+      const next = await invoke<VocabCardData | null>('random_vocab_card');
+      if (next) {
+        setCard(next);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
 
   return {
-    vocabList,
-    currentWord,
+    card,
     loading,
     error,
     getRandomWord,
     getNextWord,
     getPreviousWord,
-    reload: loadVocab
+    getNextMeaning,
+    getPreviousMeaning,
+    reload: loadCard,
   };
 };
