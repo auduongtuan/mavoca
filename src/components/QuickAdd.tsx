@@ -86,6 +86,22 @@ export const QuickAdd: React.FC = () => {
       previewCache.current.clear();
       if (focused) {
         inputRef.current?.focus();
+        // The shortcut reads the word highlighted in the app in front of us
+        // before this window takes the focus, so opening it over a highlighted
+        // word starts on that word. It is selected, so typing replaces it.
+        invoke<string | null>('take_pending_selection')
+          .then((selected) => {
+            const input = inputRef.current;
+            // Never overwrite something typed while the answer was on its way.
+            if (!selected || !input || input.value) {
+              return;
+            }
+            setWord(selected);
+            requestAnimationFrame(() => inputRef.current?.select());
+          })
+          .catch((err) => {
+            console.error('Failed to read the selected word', err);
+          });
       }
     });
     return () => {

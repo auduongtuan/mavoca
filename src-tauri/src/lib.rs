@@ -3,6 +3,7 @@ mod dictionary;
 #[cfg(target_os = "macos")]
 mod macos_dictionary;
 mod model;
+mod selection;
 mod translator;
 mod vietnamese;
 
@@ -100,6 +101,11 @@ struct AppState {
     is_window_visible: Arc<Mutex<bool>>,
     /// Mirrors the `rotation_interval_secs` setting for the rotation thread.
     rotation_interval_secs: Arc<AtomicU64>,
+    /// The word selected in the app in front of us when the add-word shortcut
+    /// was pressed. Read before the window takes focus, because after that
+    /// there is no other app to read it from, and taken by the window when it
+    /// opens so a later opening does not reuse it.
+    pending_selection: Arc<Mutex<Option<String>>>,
 }
 
 fn load_seed_vocab() -> Vec<SeedVocabWord> {
@@ -2056,6 +2062,24 @@ fn hide_quick_add_window(app: tauri::AppHandle) {
     }
 }
 
+/// Remembers the word highlighted in the application in front of Mavoca, so the
+/// window the shortcut is about to open can start on it. Called before that
+/// window takes focus: once it has, the frontmost application is ours and the
+/// selection is gone.
+fn recall_selected_word(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    *state.pending_selection.lock().unwrap() = selection::selected_word();
+}
+
+/// The forgotten word, taken once: the window is shown again and again, and only
+/// the opening that follows a press of the shortcut has a selection behind it.
+#[tauri::command]
+fn take_pending_selection(state: tauri::State<'_, AppState>) -> Option<String> {
+    state.pending_selection.lock().unwrap().take()
+}
+
 /// Grows the quick-add window while it shows a suggestion list or a meaning, and
 /// shrinks it back afterwards. The field sits at a fixed offset from the top left
 /// of the window, so only the list and the pane gain room and nothing on screen
@@ -2070,7 +2094,7 @@ fn resize_quick_add_window(app: tauri::AppHandle, width: f64, height: f64) -> Re
     // well as the list; the clamps only stop a bad measurement from escaping the
     // screen. The window grows down from where it was opened, so the room left
     // below its top edge is the real ceiling: a short screen keeps the last
-    // lines of a long entry visible where a fixed 640 would push them off it.
+    // lines of a long entry visible where a fixed 560 would push them off it.
     let mut max_height = QUICK_ADD_MAX_HEIGHT;
     if let (Ok(Some(monitor)), Ok(position)) = (window.current_monitor(), window.outer_position()) {
         let scale_factor = monitor.scale_factor();
@@ -2350,6 +2374,7 @@ pub fn run() {
                 .with_handler(|app, _shortcut, event| {
                     // Only one shortcut is ever registered, so any press is it.
                     if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        recall_selected_word(app);
                         show_quick_add_window(app);
                     }
                 })
@@ -2358,6 +2383,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             show_main_window,
             hide_quick_add_window,
+            take_pending_selection,
             hide_main_window,
             resize_popup,
             show_manager_window,
@@ -2409,6 +2435,7 @@ pub fn run() {
                 current_index: Arc::new(Mutex::new(0)),
                 is_window_visible: Arc::new(Mutex::new(false)),
                 rotation_interval_secs: Arc::new(AtomicU64::new(rotation_interval_secs)),
+                pending_selection: Arc::new(Mutex::new(None)),
             };
 
             if let Some(card) = current_card(&app_state) {

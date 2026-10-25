@@ -76,6 +76,8 @@ and `src-tauri/tauri.conf.json`.
   no database or Tauri dependencies.
 - `src-tauri/src/macos_dictionary.rs` and `src-tauri/native/` read the
   dictionaries installed with macOS; `build.rs` compiles the C bridge.
+- `src-tauri/src/selection.rs` reads the word highlighted in the application in
+  front of Mavoca, through the Accessibility bridge in `native/selection.c`.
 - `src-tauri/src/completion.rs` answers the add-word field's completions from
   the word list macOS installs. Like the parsers, it has no database or Tauri
   dependencies.
@@ -185,6 +187,38 @@ turns it off. `SettingsPanel` repeats the default for its Reset button.
 - `add_vocab_word` is `async` and does its work in `spawn_blocking`, so the
   quick-add window keeps painting while the dictionary lookup runs.
 
+### The Selected Word
+
+Pressing the shortcut over a highlighted word opens the field on that word, so
+looking one up in another app costs a shortcut rather than a shortcut and a
+copy. Double click a word in Safari, Preview, or an editor, press the shortcut,
+and the word is there with its suggestions and its meaning already showing.
+
+- The read happens in the shortcut handler, **before** `show_quick_add_window`:
+  Mavoca is an agent app, so the other application still has the keyboard at
+  that moment, and once the quick-add window takes the focus the frontmost
+  application is Mavoca itself and there is nothing to read. `recall_selected_word`
+  stores the result in `AppState.pending_selection`; `take_pending_selection`
+  hands it over and clears it, because the window is shown again and again and
+  only the opening behind a press has a selection behind it.
+- `QuickAdd.tsx` asks for it in the focus handler, which is also where the field
+  is emptied, so a new opening starts on the selection rather than on the word
+  left over from last time. The field takes the word selected, so typing replaces
+  it, and anything typed while the answer was on its way is left alone.
+- `selection::single_word` decides what counts as a word: a selection is
+  trimmed of the quotes, brackets, and punctuation an application wraps it in,
+  and is refused outright when it is not exactly one word. A triple click selects
+  a paragraph, and a paragraph is not a word to add.
+- This is the Accessibility API (`AXFocusedApplicationAttribute` →
+  `AXFocusedUIElementAttribute` → `AXSelectedTextAttribute`), so Mavoca needs the
+  Accessibility permission. Without it every call fails, the first failure asks
+  macOS to show its own grant dialog once per launch, and the shortcut opens an
+  empty field exactly as before. A rebuilt bundle is re-signed, so the grant
+  belongs to the previous binary and has to be given again after an install.
+- The calls are synchronous IPC into the other application, so the system-wide
+  element is given a short `AXUIElementSetMessagingTimeout`: a stalled
+  application must not hold the key press.
+
 ## Add Word Suggestions
 
 The add-word field completes what is being typed, and the row under the arrow
@@ -269,17 +303,6 @@ has to be given up to answer "what does this mean?".
   from `.quick-add-content`, which is `width: max-content` so it reports the room
   the columns need rather than the width of the window, and hides the pane again
   when the list closes, back to 420.
-- The window grows to fit the meaning, not the list: `QUICK_ADD_MAX_HEIGHT` is
-  640, the room four definitions and the Lạc Việt entry under them need, and the
-  height is clamped to the room left on screen below the window's own top edge
-  (`QUICK_ADD_SCREEN_MARGIN`), the same clamp `resize_popup` makes. A screen too
-  short for that scrolls `.quick-add` rather than cutting the entry off.
-- `.quick-add-preview` caps itself at a **fixed** `max-height: 600px` — the 640
-  less the window's 40px of padding — and never at `calc(100vh - …)`. A
-  viewport-sized cap measures against the window as it is now, so the content
-  can never report itself taller than the window and the window can never grow;
-  that deadlock is why the number is fixed. The pane is what the window is sized
-  from, so a list has never been enough to size it.
 
 ## Backup Behavior
 
