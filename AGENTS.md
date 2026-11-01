@@ -26,6 +26,8 @@ The React frontend renders the popup, manager, and settings screens.
 - Preview the built frontend only: `bun run preview`
 - Check Rust code: `cd src-tauri && cargo check`
 - Format Rust code: `cd src-tauri && cargo fmt`
+- Create the local signing identity, once per machine:
+  `./scripts/create-signing-identity.sh` (see The Signing Identity)
 
 Tauri dev expects Vite on port `1420`. This is configured in `vite.config.ts`
 and `src-tauri/tauri.conf.json`.
@@ -591,6 +593,29 @@ Mavoca is a menu bar extra, not an app in the Dock.
   the `NSPanel` rather than converting an existing window, which needs the
   window to come from `tauri-nspanel` or from our own `NSWindow` rather than
   from `WebviewWindowBuilder`.
+
+## The Signing Identity
+
+`bundle.macOS.signingIdentity` is `Mavoca Local Signing`, a self-signed
+certificate trusted for code signing in the login keychain.
+`scripts/create-signing-identity.sh` creates it, once per machine; `bun run tauri
+build` fails without it rather than quietly falling back.
+
+It is there for TCC, not for Gatekeeper. Left unsigned, the bundle carries only
+the linker's ad-hoc signature — `Signature=adhoc`, `linker-signed`,
+`Sealed Resources=none`, `Info.plist=not bound`, and a linker-generated
+`Identifier=mavoca-<hash>` rather than the bundle id. With no certificate there
+is no stable designated requirement to store, so TCC pins the Accessibility
+grant to the binary's exact cdhash and every rebuild voids it silently. Signed,
+the requirement names the identifier and the certificate leaf, and the grant
+survives a rebuild.
+
+`hardenedRuntime` is off. It buys nothing for an app that is not notarized, and
+it turns on library validation, which a certificate with no team identifier has
+no business promising.
+
+Do not notarize or re-sign the bundle with a different identity casually: each
+change of identity is a new grant.
 
 ## Tray And Window Behavior
 
