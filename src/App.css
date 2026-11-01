@@ -1257,6 +1257,19 @@ html, body {
   color: #c0443a;
 }
 
+/* The one action in the status line, for the permission the window cannot grant
+   itself. It takes the colour of the line it sits in rather than carrying one of
+   its own, so the line still reads as a sentence. */
+.quick-add-status-action {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* The meaning of the highlighted suggestion, beside the list. It is what the
    popup will show once the word is added, so the field never has to be given up
    to answer "what does this mean?". */

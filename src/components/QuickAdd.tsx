@@ -61,6 +61,8 @@ export const QuickAdd: React.FC = () => {
   const [preview, setPreview] = useState<WordPreview | null>(null);
   /** The word whose list was dismissed, so it does not reopen until the next edit. */
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
+  /** Whether the selected word can be read at all; null until Rust has answered. */
+  const [axTrusted, setAxTrusted] = useState<boolean | null>(null);
   /** Answers to superseded lookups are ignored rather than shown late. */
   const latestLookup = useRef(0);
   /** A meaning is looked up once per word per opening, not once per arrow key. */
@@ -89,6 +91,11 @@ export const QuickAdd: React.FC = () => {
         // The shortcut reads the word highlighted in the app in front of us
         // before this window takes the focus, so opening it over a highlighted
         // word starts on that word. It is selected, so typing replaces it.
+        // Asked on every opening, not once: the permission can be granted while
+        // the window is hidden, and the warning has to go away by itself.
+        invoke<boolean>('accessibility_trusted')
+          .then(setAxTrusted)
+          .catch(() => setAxTrusted(null));
         invoke<string | null>('take_pending_selection')
           .then((selected) => {
             const input = inputRef.current;
@@ -335,8 +342,39 @@ export const QuickAdd: React.FC = () => {
                 )}
               </Autocomplete.List>
             )}
-            <p className={error ? 'quick-add-status error' : 'quick-add-status'}>
-              {error ?? (busy ? 'Looking up meanings…' : 'Enter to add · Tab to complete · Esc to close')}
+            {/* The missing permission is said here rather than left to silence:
+                without it the shortcut opens an empty field, which is exactly
+                what it does when nothing was selected. It yields to the error
+                and to the lookup, both of which are about the word in hand. */}
+            <p
+              className={
+                error || (!busy && axTrusted === false)
+                  ? 'quick-add-status error'
+                  : 'quick-add-status'
+              }
+            >
+              {error ??
+                (busy ? (
+                  'Looking up meanings…'
+                ) : axTrusted === false ? (
+                  <>
+                    No Accessibility access, so the selected word can't be read.{' '}
+                    <button
+                      type="button"
+                      className="quick-add-status-action"
+                      // A click that took the focus out of the field would close
+                      // the window through the blur handler.
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        void invoke('open_accessibility_settings');
+                      }}
+                    >
+                      Open Settings
+                    </button>
+                  </>
+                ) : (
+                  'Enter to add · Tab to complete · Esc to close'
+                ))}
             </p>
           </div>
           {highlighted && (

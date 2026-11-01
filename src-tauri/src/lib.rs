@@ -2406,6 +2406,34 @@ fn take_pending_selection(state: tauri::State<'_, AppState>) -> Option<String> {
     state.pending_selection.lock().unwrap().take()
 }
 
+/// Whether Mavoca may read the word selected in another application.
+///
+/// The add-word window asks on every opening rather than once, so granting the
+/// permission makes the warning go away by itself.
+#[tauri::command]
+fn accessibility_trusted() -> bool {
+    selection::accessibility_trusted()
+}
+
+/// Opens System Settings at the Accessibility list, which is the only thing that
+/// helps in either case: the app was never granted the permission, or it was
+/// granted to an earlier build and the stale entry has to be removed with `-`
+/// before it can be added again. macOS shows no prompt of its own in the second
+/// case, so there is nowhere else to send the user.
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        const ACCESSIBILITY_PANE: &str =
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+        std::process::Command::new("open")
+            .arg(ACCESSIBILITY_PANE)
+            .spawn()
+            .map_err(|error| format!("Failed to open System Settings: {error}"))?;
+    }
+    Ok(())
+}
+
 /// Grows the quick-add window while it shows a suggestion list or a meaning, and
 /// shrinks it back afterwards. The field sits at a fixed offset from the top left
 /// of the window, so only the list and the pane gain room and nothing on screen
@@ -2707,6 +2735,8 @@ pub fn run() {
             show_main_window,
             hide_quick_add_window,
             take_pending_selection,
+            accessibility_trusted,
+            open_accessibility_settings,
             hide_main_window,
             resize_popup,
             show_manager_window,

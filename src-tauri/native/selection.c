@@ -66,6 +66,8 @@ static void request_accessibility_once(void) {
   }
 }
 
+int mavoca_accessibility_trusted(void) { return AXIsProcessTrusted() ? 1 : 0; }
+
 char *mavoca_selected_text(void) {
   if (!AXIsProcessTrusted()) {
     request_accessibility_once();

@@ -232,10 +232,22 @@ and the word is there with its suggestions and its meaning already showing.
   a paragraph, and a paragraph is not a word to add.
 - This is the Accessibility API (`AXFocusedApplicationAttribute` →
   `AXFocusedUIElementAttribute` → `AXSelectedTextAttribute`), so Mavoca needs the
-  Accessibility permission. Without it every call fails, the first failure asks
-  macOS to show its own grant dialog once per launch, and the shortcut opens an
-  empty field exactly as before. A rebuilt bundle is re-signed, so the grant
-  belongs to the previous binary and has to be given again after an install.
+  Accessibility permission. Without it every call fails and the shortcut opens an
+  empty field, which is exactly what it does when nothing was selected — so the
+  window says so instead of leaving it to silence. `accessibility_trusted` is
+  asked on every opening, not once, because the permission can be granted while
+  the window is hidden; a refusal replaces the hint line with a message and an
+  `open_accessibility_settings` button. The first failed *read* also asks macOS
+  for its own grant dialog, once per launch.
+- The grant belongs to the signature of the binary it was given to, which is why
+  the bundle is signed; see The Signing Identity. Granted to an unsigned build it
+  is pinned to that build's cdhash, and tccd then refuses the next build with
+  `Failed to match existing code requirement for subject com.vocablearning.app`
+  while System Settings still shows the toggle switched on. Flipping the toggle
+  does not mend it: the stale entry has to be removed with `-`, or reset with
+  `sudo tccutil reset Accessibility com.vocablearning.app`, and the app
+  relaunched. `AXIsProcessTrusted` is answered from a per-process cache, so a
+  grant given to a running instance may not be seen until it restarts.
 - The calls are synchronous IPC into the other application, so the system-wide
   element is given a short `AXUIElementSetMessagingTimeout`: a stalled
   application must not hold the key press.

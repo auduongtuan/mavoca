@@ -9,4 +9,9 @@ char *mavoca_selected_text(void);
 
 void mavoca_selection_free(char *text);
 
+// Whether Mavoca holds the Accessibility permission, so a failed read can say
+// which of the two reasons it failed for: nothing was selected, or the app is
+// not allowed to look. Non-zero when it is trusted.
+int mavoca_accessibility_trusted(void);
+
 #endif

@@ -50,6 +50,29 @@ pub fn selected_word() -> Option<String> {
     None
 }
 
+/// Whether the Accessibility permission is granted.
+///
+/// A read that fails returns `None` whether nothing was selected or the app is
+/// not allowed to look, so the window has no way to tell the user which it was.
+/// This separates the two, and it is worth separating: the permission is pinned
+/// to the signature of the binary it was granted to, so a reinstall can leave
+/// the toggle in System Settings switched on while the grant no longer matches
+/// and every read fails silently.
+#[cfg(target_os = "macos")]
+pub fn accessibility_trusted() -> bool {
+    extern "C" {
+        fn mavoca_accessibility_trusted() -> std::ffi::c_int;
+    }
+
+    unsafe { mavoca_accessibility_trusted() != 0 }
+}
+
+/// There is no permission to hold anywhere else, so nothing is ever missing.
+#[cfg(not(target_os = "macos"))]
+pub fn accessibility_trusted() -> bool {
+    true
+}
+
 /// Reduces a selection to the word in it, or nothing.
 ///
 /// A triple click selects a paragraph and a double click in some editors takes
