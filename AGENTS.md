@@ -378,8 +378,9 @@ confirmed come up far more often than the ones you have.
   of cards sharing a `vocab_id` — and leaves the word on screen out of the pool
   while there is another to pick, so a tick always visibly moves.
 - Auto-rotation, the tray's shuffle, and `Got it` all draw this way. The ‹ ›
-  stepper and the footer's ← → do **not**: browsing stays sequential and
-  predictable, and only the automatic moves are weighted.
+  stepper does not, and the footer's ← → only fall back to their list-order
+  walk once their history stack is empty; the arrows themselves never draw by
+  weight.
 - Awarding a point deliberately does **not** bump `updated_at` or sync the
   backup. A point is not content, and the backup is a whole-database
   `VACUUM INTO`; the button is made to be pressed in bursts, so points reach
@@ -708,12 +709,24 @@ change of identity is a new grant.
     `step_vocab_card` deltas. They sit on the card's word line, above the part
     of speech and the transcription, because a step changes those as well as the
     definition text.
-  - The footer's ← → move between words, skipping whatever is left of the
-    current word's definitions and landing on the first definition of the next
-    or previous one, wrapping at both ends. A word is a run of cards sharing a
-    `vocab_id`, so `step_vocab_word` finds the boundary in `word_step_index`
-    rather than counting positions — the card it starts from may be any of the
-    word's definitions.
+  - The footer's ← → move between words. They walk a browser-style history
+    first: ← returns to the word that was actually on screen last, and → the
+    word that back step walked past, so a weighted draw (shuffle, `Got it`,
+    rotation) can be undone instead of stepped over. When the stack in that
+    direction is empty they fall back to list order, skipping whatever is left
+    of the current word's definitions and landing on the first definition of
+    the next or previous word, wrapping at both ends. A word is a run of cards
+    sharing a `vocab_id`, so the fallback finds the boundary in
+    `word_step_index` rather than counting positions. History entries are
+    `CardRef`s — `vocab_id` plus the definition's `position`, because every
+    vocabulary change rebuilds the card list and shifts indices — and are
+    dropped when the word no longer exists. `HISTORY_LIMIT` (50) caps each
+    stack.
+  - Automatic rotation is not browsing and does not fill the history. Its first
+    tick after the popup hides parks the card that was on screen in
+    `AppState.hidden_from`; showing the popup turns that into the back entry,
+    so ← after reopening returns to the word you last saw rather than to the
+    alphabetical neighbour of the word rotation drew.
 - `AppState.cards` and `AppState.current_index` are never locked at the same
   time. Keep it that way.
 

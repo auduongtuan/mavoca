@@ -9,7 +9,7 @@ mod vietnamese;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -62,6 +62,10 @@ const MAX_SUGGESTIONS: usize = 6;
 /// How often the rotation thread checks the popup and the interval, so a new
 /// interval or a closed popup takes effect within a second.
 const ROTATION_TICK: Duration = Duration::from_secs(1);
+/// Words each of the footer's back and forward stacks remembers. An entry is
+/// two integers, so the cap is about keeping "back" within the browsing the
+/// user still remembers, not about memory.
+const HISTORY_LIMIT: usize = 50;
 /// Logical popup width; matches `width` for the `main` window in tauri.conf.json.
 const POPUP_WIDTH: f64 = 320.0;
 /// The popup grows to fit its card between these heights, then scrolls.
@@ -88,16 +92,87 @@ struct AppSettings {
     rotation_interval_secs: u64,
 }
 
+/// A card's place in the rotation in a form that survives a rebuild.
+///
+/// Every vocabulary change rebuilds the card list, and a word added or deleted
+/// shifts the index of every card after it. History therefore remembers the
+/// word and the definition's position within it, not the index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CardRef {
+    vocab_id: i64,
+    position: usize,
+}
+
+impl CardRef {
+    fn of(card: &VocabCard) -> Self {
+        Self {
+            vocab_id: card.vocab_id,
+            position: card.position,
+        }
+    }
+}
+
+/// The words the popup has walked through, browser-style.
+///
+/// `back` holds the words a move forward left behind, most recent last.
+/// `forward` holds what a back step left behind, so → retraces that step
+/// instead of walking on past the word it returned from.
+#[derive(Default)]
+struct NavigationHistory {
+    back: VecDeque<CardRef>,
+    forward: VecDeque<CardRef>,
+}
+
+impl NavigationHistory {
+    /// Records a jump that is not part of walking the history — a shuffle, a
+    /// point, a word added — so ← returns to the word that was on screen.
+    fn record(&mut self, departed: CardRef) {
+        push_capped(&mut self.back, departed);
+        self.forward.clear();
+    }
+
+    fn take_back(&mut self) -> Option<CardRef> {
+        self.back.pop_back()
+    }
+
+    fn take_forward(&mut self) -> Option<CardRef> {
+        self.forward.pop_back()
+    }
+
+    /// Pushes the card a history step leaves behind onto the opposite stack,
+    /// which is what makes the arrow that undoes the step come back to it.
+    fn after_move(&mut self, departed: CardRef, back: bool) {
+        if back {
+            push_capped(&mut self.forward, departed);
+        } else {
+            push_capped(&mut self.back, departed);
+        }
+    }
+}
+
+fn push_capped(stack: &mut VecDeque<CardRef>, entry: CardRef) {
+    if stack.len() == HISTORY_LIMIT {
+        stack.pop_front();
+    }
+    stack.push_back(entry);
+}
+
 #[derive(Clone)]
 struct AppState {
     db: Arc<Mutex<Connection>>,
     vocab_list: Arc<Mutex<Vec<VocabWord>>>,
     /// Flattened rotation list: one element per definition, rebuilt whenever
     /// the vocabulary changes. `current_index` indexes into this, not into
-    /// `vocab_list`, which is what makes prev/next step definition by
-    /// definition rather than word by word.
+    /// `vocab_list`, which is what lets the card's stepper walk definitions
+    /// rather than words.
     cards: Arc<Mutex<Vec<VocabCard>>>,
     current_index: Arc<Mutex<usize>>,
+    /// What the footer's ← and → walk, independent of the rotation order.
+    history: Arc<Mutex<NavigationHistory>>,
+    /// The card auto-rotation drew away from while the popup was hidden. It is
+    /// not history yet: rotation ticks are not browsing, but the word last seen
+    /// before closing still has to be the first ← away after reopening.
+    hidden_from: Arc<Mutex<Option<CardRef>>>,
     is_window_visible: Arc<Mutex<bool>>,
     /// Mirrors the `rotation_interval_secs` setting for the rotation thread.
     rotation_interval_secs: Arc<AtomicU64>,
@@ -1068,6 +1143,74 @@ fn current_card(state: &AppState) -> Option<VocabCard> {
     cards.get(index).cloned()
 }
 
+/// The card on screen, in a form that survives the card list being rebuilt.
+fn current_card_ref(state: &AppState) -> Option<CardRef> {
+    let cards = state.cards.lock().unwrap();
+    let index = *state.current_index.lock().unwrap();
+    cards.get(index).map(CardRef::of)
+}
+
+/// Finds the card a history entry names, falling back to the word's first
+/// definition when that definition is gone — a re-fetch can shorten a word.
+/// A word that no longer exists resolves to nothing.
+fn resolve_card_ref(cards: &[VocabCard], target: CardRef) -> Option<usize> {
+    cards
+        .iter()
+        .position(|card| CardRef::of(card) == target)
+        .or_else(|| {
+            cards
+                .iter()
+                .position(|card| card.vocab_id == target.vocab_id)
+        })
+}
+
+/// Records a move that was not a walk through the history stacks — a shuffle,
+/// `Got it`, a word added — so ← returns to the word it left.
+///
+/// The word rotation drew while the popup was hidden is not one the user saw,
+/// so `hidden_from` is preferred over the card on screen when it is set.
+fn record_navigation(state: &AppState, target: usize) {
+    let (current, target_word) = {
+        let cards = state.cards.lock().unwrap();
+        let index = *state.current_index.lock().unwrap();
+        (
+            cards.get(index).map(CardRef::of),
+            cards.get(target).map(|card| card.vocab_id),
+        )
+    };
+
+    let Some(current) = current else {
+        return;
+    };
+    // The footer arrows cycle the definitions of a single word; a jump within
+    // the word is not word navigation and must not spend a back press on
+    // itself.
+    if target_word == Some(current.vocab_id) {
+        return;
+    }
+
+    let departed = state.hidden_from.lock().unwrap().take().unwrap_or(current);
+    state.history.lock().unwrap().record(departed);
+}
+
+/// Makes the history agree with a popup that has just reopened.
+///
+/// If rotation moved the card while the popup was hidden, the card it drew is
+/// not one the user saw. The word that was on screen before becomes the back
+/// entry for the new session, so ← returns to it instead of to the rotation
+/// word's alphabetical neighbour.
+fn begin_popup_session(state: &AppState) {
+    let Some(origin) = state.hidden_from.lock().unwrap().take() else {
+        return;
+    };
+
+    if current_card_ref(state) == Some(origin) {
+        return;
+    }
+
+    state.history.lock().unwrap().record(origin);
+}
+
 /// Moves the rotation to `index` and tells the popup and tray about it.
 fn apply_card_index(app: &tauri::AppHandle, state: &AppState, index: usize) -> Option<VocabCard> {
     let card = {
@@ -1420,11 +1563,11 @@ fn step_vocab_card(
     apply_card_index(&app, &state, next)
 }
 
-/// Steps the rotation by one word, landing on the first definition of the word
-/// before or after the current one.
+/// Steps the popup back or forward one word.
 ///
-/// The popup's footer arrows move between words; the ‹ › stepper on the card's
-/// word line is what walks the definitions of one word (`step_vocab_card`).
+/// The footer's arrows walk the words the user actually saw first; see
+/// `step_word_index`. The ‹ › stepper on the card's word line is what walks the
+/// definitions of one word (`step_vocab_card`).
 #[tauri::command]
 fn step_vocab_word(
     state: tauri::State<AppState>,
@@ -1437,7 +1580,8 @@ fn step_vocab_word(
 
     let next = {
         let cards = state.cards.lock().unwrap();
-        word_step_index(&cards, current, direction)
+        let mut history = state.history.lock().unwrap();
+        step_word_index(&cards, current, direction, &mut history)
     }?;
 
     apply_card_index(&app, &state, next)
@@ -1484,6 +1628,52 @@ fn word_step_index(cards: &[VocabCard], current: usize, direction: i32) -> Optio
         previous -= 1;
     }
     Some(previous)
+}
+
+/// The footer's word step: the history first, list order once a stack runs out.
+///
+/// ← pops the word that was last left behind and → retraces what ← walked
+/// past, so a weighted draw can be undone instead of stepped over. Only when
+/// the stack in that direction is empty does the arrow fall back to
+/// `word_step_index` — that is what still reaches every word, and what wraps at
+/// both ends of the list.
+fn step_word_index(
+    cards: &[VocabCard],
+    current: usize,
+    direction: i32,
+    history: &mut NavigationHistory,
+) -> Option<usize> {
+    if cards.is_empty() {
+        return None;
+    }
+
+    let current = current.min(cards.len() - 1);
+    let departed = CardRef::of(&cards[current]);
+    let back = direction < 0;
+
+    loop {
+        let target = if back {
+            history.take_back()
+        } else {
+            history.take_forward()
+        };
+
+        match target {
+            Some(target) => {
+                if let Some(index) = resolve_card_ref(cards, target) {
+                    history.after_move(departed, back);
+                    return Some(index);
+                }
+                // The word was deleted while it sat in the stack: drop the
+                // stale entry and keep looking.
+            }
+            None => break,
+        }
+    }
+
+    let index = word_step_index(cards, current, direction)?;
+    history.after_move(departed, back);
+    Some(index)
 }
 
 /// A word's share of the rotation draw. Points make a word rarer without ever
@@ -1586,6 +1776,7 @@ fn weighted_next_index(state: &AppState) -> Option<usize> {
 #[tauri::command]
 fn random_vocab_card(state: tauri::State<AppState>, app: tauri::AppHandle) -> Option<VocabCard> {
     let next = weighted_next_index(&state)?;
+    record_navigation(&state, next);
     apply_card_index(&app, &state, next)
 }
 
@@ -1628,6 +1819,7 @@ fn award_vocab_point(
         return Ok(None);
     };
 
+    record_navigation(&state, next);
     Ok(apply_card_index(&app, &state, next))
 }
 
@@ -1647,6 +1839,7 @@ fn set_current_vocab_id(
         return Err("Vocabulary word was not found".into());
     };
 
+    record_navigation(&state, index);
     apply_card_index(&app, &state, index);
     Ok(())
 }
@@ -2312,6 +2505,7 @@ async fn translate_word(word: String) -> Result<String, String> {
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
     *state.is_window_visible.lock().unwrap() = true;
+    begin_popup_session(&state);
     if let Some(window) = app.get_webview_window("main") {
         // Shown from the frontend after a word was added, so there is no click
         // on the menu bar item to line the popup up with: the item's own frame
@@ -2675,6 +2869,18 @@ fn start_auto_rotation(app: tauri::AppHandle, state: AppState) {
             let Some(index) = weighted_next_index(&state) else {
                 continue;
             };
+
+            // A rotation tick is not browsing, so it does not fill the history.
+            // The card it is about to leave is parked instead: opening the
+            // popup turns it into the back entry, which is how ← returns to
+            // the word that was on screen when the popup closed.
+            if let Some(origin) = current_card_ref(&state) {
+                let mut hidden_from = state.hidden_from.lock().unwrap();
+                if hidden_from.is_none() {
+                    *hidden_from = Some(origin);
+                }
+            }
+
             apply_card_index(&app, &state, index);
         }
     });
@@ -2788,6 +2994,8 @@ pub fn run() {
                 vocab_list: Arc::new(Mutex::new(initial_vocab)),
                 cards: Arc::new(Mutex::new(initial_cards)),
                 current_index: Arc::new(Mutex::new(0)),
+                history: Arc::new(Mutex::new(NavigationHistory::default())),
+                hidden_from: Arc::new(Mutex::new(None)),
                 is_window_visible: Arc::new(Mutex::new(false)),
                 rotation_interval_secs: Arc::new(AtomicU64::new(rotation_interval_secs)),
                 pending_selection: Arc::new(Mutex::new(None)),
@@ -2939,6 +3147,7 @@ pub fn run() {
                             let _ = window.hide();
                         } else {
                             *state.is_window_visible.lock().unwrap() = true;
+                            begin_popup_session(&state);
                             #[cfg(target_os = "macos")]
                             let placed = position_popup_under_tray(&window);
                             #[cfg(not(target_os = "macos"))]
@@ -3565,14 +3774,7 @@ mod tests {
     /// current word's definitions instead of walking into the next one.
     #[test]
     fn a_word_step_lands_on_the_next_word() {
-        let cards = vec![
-            card(1, "apple", 1, 1),
-            card(2, "run", 1, 3),
-            card(2, "run", 2, 3),
-            card(2, "run", 3, 3),
-            card(3, "walk", 1, 2),
-            card(3, "walk", 2, 2),
-        ];
+        let cards = words();
 
         // Forward from anywhere in a word lands on the first card of the next.
         assert_eq!(word_step_index(&cards, 0, 1), Some(1));
@@ -3593,6 +3795,94 @@ mod tests {
         assert_eq!(word_step_index(&cards, 0, -1), Some(4));
 
         assert_eq!(word_step_index(&[], 0, 1), None);
+    }
+
+    /// ← returns to the word that was actually left, not to the word that
+    /// happens to precede it in the list; → retraces the step.
+    #[test]
+    fn the_footer_arrows_walk_the_words_that_were_seen() {
+        let cards = words();
+        let mut history = NavigationHistory::default();
+
+        // A shuffle from apple lands on walk and records apple.
+        history.record(CardRef::of(&cards[0]));
+
+        assert_eq!(step_word_index(&cards, 4, -1, &mut history), Some(0));
+        assert_eq!(step_word_index(&cards, 0, 1, &mut history), Some(4));
+    }
+
+    /// With no history in that direction a footer step keeps the list-order
+    /// walk, and remembers the word it left so the other arrow can return.
+    #[test]
+    fn a_footer_step_without_history_falls_back_to_the_list() {
+        let cards = words();
+        let mut history = NavigationHistory::default();
+
+        // Back from the first word wraps to the start of the last one...
+        assert_eq!(step_word_index(&cards, 0, -1, &mut history), Some(4));
+        // ...forward returns there, and then continues in list order.
+        assert_eq!(step_word_index(&cards, 4, 1, &mut history), Some(0));
+        assert_eq!(step_word_index(&cards, 0, 1, &mut history), Some(1));
+    }
+
+    /// A vocabulary change rebuilds the card list, so a history entry can name
+    /// a word that has since been deleted. It is dropped rather than landing on
+    /// whatever card now sits at its old position.
+    #[test]
+    fn history_skips_words_that_are_gone() {
+        let cards = words();
+        let mut history = NavigationHistory::default();
+        history.record(CardRef::of(&cards[0]));
+        history.record(CardRef {
+            vocab_id: 99,
+            position: 1,
+        });
+
+        assert_eq!(step_word_index(&cards, 4, -1, &mut history), Some(0));
+    }
+
+    /// A re-fetch can renumber a word's definitions. The entry then lands on
+    /// the word's first definition rather than failing to resolve.
+    #[test]
+    fn history_lands_on_the_first_definition_when_the_old_one_is_gone() {
+        let cards = words();
+        let target = CardRef {
+            vocab_id: 3,
+            position: 9,
+        };
+
+        assert_eq!(resolve_card_ref(&cards, target), Some(4));
+    }
+
+    #[test]
+    fn history_keeps_only_the_most_recent_words() {
+        let mut history = NavigationHistory::default();
+        for id in 0..(HISTORY_LIMIT as i64 + 5) {
+            history.record(CardRef {
+                vocab_id: id,
+                position: 1,
+            });
+        }
+
+        assert_eq!(history.back.len(), HISTORY_LIMIT);
+        assert_eq!(
+            history.take_back(),
+            Some(CardRef {
+                vocab_id: HISTORY_LIMIT as i64 + 4,
+                position: 1,
+            })
+        );
+    }
+
+    fn words() -> Vec<VocabCard> {
+        vec![
+            card(1, "apple", 1, 1),
+            card(2, "run", 1, 3),
+            card(2, "run", 2, 3),
+            card(2, "run", 3, 3),
+            card(3, "walk", 1, 2),
+            card(3, "walk", 2, 2),
+        ]
     }
 
     fn card(vocab_id: i64, word: &str, position: usize, total: usize) -> VocabCard {
