@@ -84,8 +84,13 @@ html, body {
  * the card must not size itself from the window.
  */
 .vocab-card {
-  /* Shared by the meaning stepper and the VI toggle so they line up. */
+  /* The VI toggle's height; the small icon button matches it on its own. */
   --meta-btn-size: 20px;
+  /* An icon button's padding. It is cancelled by an equal negative margin, so
+     a row of them has to add it back to its `gap` — hence a variable rather
+     than a number buried in the rule. */
+  --icon-btn-pad: 7px;
+  --icon-btn-pad-sm: 4px;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -119,38 +124,17 @@ html, body {
   flex-shrink: 0;
 }
 
-.word-entry {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-}
-
 .word-line {
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  /* Word to badge, and to the speaker glyph whose padding cancels out. */
+  gap: 10px;
   min-width: 0;
 }
 
-.speak-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
+.word-line .icon-btn {
   flex-shrink: 0;
-  padding: 0;
-  border: 1px solid rgba(55, 53, 47, 0.18);
-  border-radius: 50%;
-  background: transparent;
-  color: #37352f;
-  cursor: pointer;
-}
-
-.speak-btn:hover {
-  background: rgba(55, 53, 47, 0.06);
 }
 
 .word {
@@ -175,13 +159,22 @@ html, body {
 .pronunciation {
   display: inline-flex;
   align-items: center;
+  /* The accent label sits tight against the transcription it belongs to. */
   gap: 3px;
+}
+
+/* The speaker is not part of that pair and needs air, so its distance is set
+   on the button rather than on the row. The arithmetic is spelled out because
+   an icon button's gap is measured glyph to glyph: the row's own gap and the
+   button's padding are both already inside the 9px. */
+.pronunciation .icon-btn {
+  margin-left: calc(9px - 3px - var(--icon-btn-pad-sm));
 }
 
 /* The accent only earns a label when the card carries both, which is the one
    case where two of these sit side by side. */
 .pronunciation-accent {
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
@@ -193,36 +186,23 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
-.pronunciation-speak {
+/* Shares the VI toggle's metrics: the two sit on the same line, so the same
+   height, type size and padding, from the same `--meta-btn-size`. The weight
+   stays lighter — the badge is a label, the toggle is a control. */
+.category {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
-  margin-left: 1px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: rgba(55, 53, 47, 0.65);
-  cursor: pointer;
-}
-
-.pronunciation-speak:hover {
-  background: rgba(55, 53, 47, 0.07);
-  color: #37352f;
-}
-
-.category {
+  height: var(--meta-btn-size);
   background: rgba(255, 255, 255, 0.15);
   color: rgba(255, 255, 255, 0.9);
-  padding: 3px 8px;
-  border-radius: 4px;
+  padding: 0 6px;
+  border-radius: 5px;
   font-size: 10px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   border: 1px solid rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
   white-space: nowrap;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -243,7 +223,11 @@ html, body {
 .category[data-pos='idiom'] { --pos-color: #8a6a3a; }
 
 .vocab-card .category[data-pos] {
-  color: var(--pos-color, rgba(255, 255, 255, 0.9));
+  /* The hue identifies the part of speech, but its text still has to be read:
+     several hues on their own tint sat at 3.4-4.3:1. Mixed toward the ink here
+     and toward white in dark mode, every hue clears 4.5:1 without losing its
+     colour. */
+  color: color-mix(in srgb, var(--pos-color, #7c7a75) 72%, #37352f);
   background: color-mix(in srgb, var(--pos-color, transparent) 16%, transparent);
   border-color: color-mix(in srgb, var(--pos-color, transparent) 45%, transparent);
 }
@@ -251,13 +235,12 @@ html, body {
 .card-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   min-height: 14px;
 }
 
 .guide-word {
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -265,7 +248,7 @@ html, body {
 }
 
 .card-position {
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -274,37 +257,25 @@ html, body {
 .meaning-stepper {
   display: flex;
   align-items: center;
-  gap: 5px;
+  /* Glyph to counter, the carets' padding having cancelled out. */
+  gap: 9px;
 }
 
-.meaning-step-btn {
+/* A section heading with its own control at the right-hand end. The row is as
+   tall as that control, so the label is centred against it rather than sitting
+   on its own 10px line. */
+.section-header {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: var(--meta-btn-size);
-  height: var(--meta-btn-size);
-  padding: 0;
-  border: 1px solid rgba(55, 53, 47, 0.18);
-  border-radius: 5px;
-  background: transparent;
-  color: #37352f;
-  cursor: pointer;
-}
-
-.meaning-step-btn:hover {
-  background: rgba(55, 53, 47, 0.06);
-}
-
-.card-meta-end {
-  display: flex;
-  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  margin-left: auto;
+  min-height: var(--meta-btn-size);
 }
 
 .translate-btn {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 3px;
   height: var(--meta-btn-size);
   padding: 0 6px;
@@ -337,8 +308,6 @@ html, body {
 .vocab-card .translation {
   margin-top: 4px;
   color: rgba(55, 53, 47, 0.72);
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 /* Lạc Việt's meaning, shown on every card that has one. */
@@ -348,7 +317,7 @@ html, body {
 
 .vocab-card .translation-status {
   margin-top: 4px;
-  color: rgba(55, 53, 47, 0.5);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 12px;
 }
 
@@ -391,7 +360,7 @@ html, body {
 /* Which entry the senses came from. Not uppercased: it is Vietnamese, and the
    part of speech is shown as the dictionary writes it. */
 .dictionary-source {
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0;
@@ -412,12 +381,14 @@ html, body {
   list-style: none;
 }
 
+/* The same size as the definitions: this is the card's Vietnamese body text,
+   and a step down from the English would read as a footnote to it. */
 .sense {
   position: relative;
   padding-left: 11px;
   color: rgba(55, 53, 47, 0.72);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .sense::before {
@@ -450,7 +421,7 @@ html, body {
   padding: 0;
   border: none;
   background: none;
-  color: rgba(55, 53, 47, 0.65);
+  color: rgba(55, 53, 47, 0.7);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -460,9 +431,23 @@ html, body {
   color: #37352f;
 }
 
+/* Nested inside the English section rather than divided off from it: the
+   examples illustrate the definition above them and step with it. The space
+   does the separating now, since a hairline inside a section would read as
+   another section. */
 .example {
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  padding-top: 12px;
+  margin-top: 6px;
+}
+
+/* Quieter than `.section-label`, which names the section this sits inside:
+   two identical labels stacked would read as two sections. */
+.section-sublabel {
+  margin-bottom: 2px;
+  color: rgba(55, 53, 47, 0.55);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .example-text {
@@ -472,65 +457,104 @@ html, body {
   line-height: 1.5;
 }
 
+/* Under the sentence it translates, matching `.translation` under the
+   definition: the same step down in weight, and upright, so the English
+   stays the one in quotes. */
+.example-translation {
+  margin-top: 2px;
+  color: rgba(55, 53, 47, 0.72);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.example-translation + .example-text {
+  margin-top: 8px;
+}
+
 .controls {
   display: flex;
-  /* Wider than inside .control-group, so Random reads as its own action. */
+  align-items: center;
   gap: 14px;
   margin-top: auto;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   padding-top: 12px;
 }
 
-/* Previous and Next, kept side by side. */
+/* Moving around the vocabulary: previous, next, and random, kept together on
+   the left so the one button that changes something stands alone opposite. */
 .control-group {
   display: flex;
-  gap: 4px;
+  /* Between icon buttons the padding and the negative margin cancel, so this
+     is the distance between the glyphs themselves, not between their boxes. */
+  gap: 16px;
 }
 
-.control-btn {
+/* A quiet icon button: the fill arrives under the pointer and nowhere else, so
+   a row of them reads as one group rather than three competing controls.
+   The padding is cancelled by an equal negative margin, so the button occupies
+   only its icon and the hover fill grows outwards into the gap instead of
+   indenting the glyph away from the text and the card edge beside it. */
+.icon-btn {
+  --icon-btn-inset: var(--icon-btn-pad, 7px);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 30px;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  margin: calc(var(--icon-btn-inset) * -1);
+  padding: var(--icon-btn-inset);
+  border: 0;
   border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
+  background: transparent;
+  color: rgba(55, 53, 47, 0.75);
   cursor: pointer;
-  transition: all 0.2s ease;
-  background: rgba(255, 255, 255, 0.15);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.icon-btn-small {
+  --icon-btn-inset: var(--icon-btn-pad-sm, 4px);
+  border-radius: 5px;
+}
+
+.icon-btn:hover {
+  background: rgba(55, 53, 47, 0.08);
   color: #37352f;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
-.control-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-  border-color: rgba(255, 255, 255, 0.35);
-  transform: translateY(-1px);
+.icon-btn:active {
+  background: rgba(55, 53, 47, 0.14);
 }
 
-.control-btn:active {
-  background: rgba(255, 255, 255, 0.3);
-  transform: translateY(0);
+.icon-btn:focus-visible {
+  outline: 2px solid rgba(55, 53, 47, 0.5);
+  outline-offset: 1px;
 }
 
-.random-btn {
-  background: rgba(55, 53, 47, 0.7);
+/* The card's one primary action, and so the only solid and only labelled
+   button in the footer. Navigation sits on the left; this sits opposite it. */
+.got-it-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-left: auto;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  background: #37352f;
   color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.3);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
 }
 
-.random-btn:hover {
-  background: rgba(55, 53, 47, 0.85);
+.got-it-btn:hover {
+  background: #4a4842;
   border-color: rgba(255, 255, 255, 0.4);
 }
 
-/* Navigation sits on the left, the way out to the manager on the right. */
-.manage-btn {
-  margin-left: auto;
+.got-it-btn:active {
+  background: #262522;
 }
 
 /* Vocabulary Manager */
@@ -768,7 +792,8 @@ html, body {
 
 .word-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* Word, its score, then its definition count. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -806,6 +831,22 @@ html, body {
   color: #787774;
   font-size: 10px;
   text-transform: uppercase;
+}
+
+/* The "Got it" score. A word still at zero stays quiet; one you have
+   confirmed reads as earned, which is the only reward the feature offers. */
+.word-row small.word-points {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: none;
+  color: rgba(55, 53, 47, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+.word-row small.word-points.scored {
+  color: #37352f;
+  font-weight: 700;
 }
 
 .manager-empty {
@@ -1113,7 +1154,17 @@ html, body {
      moving. */
   height: 100vh;
   padding: 22px 20px 18px;
-  overflow: hidden;
+  /* Not `hidden`: the pane has a fixed cap, so on a screen too short for
+     `QUICK_ADD_MAX_HEIGHT` the window clamp in Rust can leave part of it below
+     the window. Scrolling the window then loses nothing, and macOS draws the
+     scrollbar only while scrolling, so nothing appears in the usual case. */
+  overflow: hidden auto;
+  /* Left transparent on purpose: the window is `NSVisualEffectMaterial::Popover`,
+     so the panel is the system blur over whatever is behind it, the same surface
+     the popup card sits on. A tint here would buy measurable contrast and lose
+     the blur, so the contrast is the text's job instead — see the tokens below,
+     which are a step stronger than the card's because this window sits over
+     documents rather than over the menu bar. */
   background: transparent;
 }
 
@@ -1139,7 +1190,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: #787774;
+  color: rgba(55, 53, 47, 0.8);
 }
 
 .quick-add-input {
@@ -1151,6 +1202,14 @@ html, body {
   color: #37352f;
   font-size: 22px;
   font-weight: 600;
+}
+
+/* WebKit's own placeholder is a fixed grey, which is invisible on the dark panel
+   and loud on the light one. This is the first thing the window says, so it is
+   set here rather than left to the default — a step under the field's own ink,
+   and never as faint as the default was. */
+.quick-add-input::placeholder {
+  color: rgba(55, 53, 47, 0.75);
 }
 
 .suggestions {
@@ -1182,7 +1241,7 @@ html, body {
 }
 
 .suggestion-tag {
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -1190,12 +1249,25 @@ html, body {
 }
 
 .quick-add-status {
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 12px;
 }
 
 .quick-add-status.error {
   color: #c0443a;
+}
+
+/* The one action in the status line, for the permission the window cannot grant
+   itself. It takes the colour of the line it sits in rather than carrying one of
+   its own, so the line still reads as a sentence. */
+.quick-add-status-action {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 /* The meaning of the highlighted suggestion, beside the list. It is what the
@@ -1207,6 +1279,15 @@ html, body {
   padding-left: 18px;
   border-left: 1px solid rgba(0, 0, 0, 0.09);
   color: #37352f;
+  /* The window stops growing at `QUICK_ADD_MAX_HEIGHT`, so a word with long
+     definitions and a Lạc Việt entry scrolls here instead of losing its last
+     sense off the bottom. The number is fixed rather than tied to the window
+     height on purpose: a cap like `calc(100vh - 40px)` measures against the
+     window as it is now, so the content can never report itself taller than the
+     window and the window can never grow. It is `QUICK_ADD_MAX_HEIGHT` minus
+     the window's 40px of padding. */
+  max-height: 600px;
+  overflow: hidden auto;
 }
 
 .preview-head {
@@ -1228,12 +1309,12 @@ html, body {
   align-items: baseline;
   gap: 8px;
   margin-top: 1px;
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 12px;
 }
 
 .preview-pos {
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-style: italic;
 }
 
@@ -1267,7 +1348,7 @@ html, body {
 
 .preview-note {
   margin-top: 8px;
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -1283,11 +1364,27 @@ html, body {
 }
 
 .preview-vi-label {
-  color: #6b6a67;
+  color: rgba(55, 53, 47, 0.8);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+/* The same senses the popup shows, under the English definitions they belong to. */
+.preview-vi .sense-list {
+  margin-top: 5px;
+}
+
+/* The popup's guide words are read against a card over the menu bar's vibrancy;
+   this pane sits over a document, where the backdrop is brighter or darker than
+   the menu bar's, so its muted text is a step stronger than the card's. */
+.quick-add-preview .guide-word {
+  color: rgba(55, 53, 47, 0.8);
+}
+
+.quick-add-preview .sense {
+  color: rgba(55, 53, 47, 0.8);
 }
 
 .editor-actions {
@@ -1537,6 +1634,12 @@ html, body {
   .category[data-pos='phrase'],
   .category[data-pos='idiom'] { --pos-color: #d6b47f; }
 
+  /* Same 4.5:1 floor as light mode, from the other side: the hues in dark mode
+     are already pale, so they only need a little white mixed in. */
+  .vocab-card .category[data-pos] {
+    color: color-mix(in srgb, var(--pos-color, #b9b8b5) 85%, #ffffff);
+  }
+
   .meaning p {
     color: #e3e2e0;
   }
@@ -1553,43 +1656,50 @@ html, body {
     color: rgba(255, 255, 255, 0.62);
   }
 
-  .pronunciation-speak {
-    color: rgba(255, 255, 255, 0.62);
-  }
-
-  .pronunciation-speak:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #ffffff;
-  }
-
   .example-text {
     color: #ffffff;
   }
 
-  .control-btn {
-    background: rgba(255, 255, 255, 0.1);
-    color: #e3e2e0;
-    border-color: rgba(255, 255, 255, 0.2);
+  .section-sublabel {
+    color: rgba(255, 255, 255, 0.62);
   }
 
-  .control-btn:hover {
-    background: rgba(255, 255, 255, 0.15);
-    border-color: rgba(255, 255, 255, 0.3);
+  .example-translation {
+    color: rgba(227, 226, 224, 0.72);
   }
 
-  .control-btn:active {
+  .icon-btn {
+    color: rgba(255, 255, 255, 0.75);
+  }
+
+  .icon-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+  }
+
+  .icon-btn:active {
     background: rgba(255, 255, 255, 0.2);
   }
 
-  .random-btn {
-    background: rgba(227, 226, 224, 0.25);
-    color: #ffffff;
-    border-color: rgba(255, 255, 255, 0.35);
+  .icon-btn:focus-visible {
+    outline-color: rgba(255, 255, 255, 0.6);
   }
 
-  .random-btn:hover {
-    background: rgba(227, 226, 224, 0.35);
+  /* Light on dark, the inverse of light mode: the primary action stays the
+     highest-contrast thing in the footer. */
+  .got-it-btn {
+    background: #e3e2e0;
+    color: #1f1e1b;
     border-color: rgba(255, 255, 255, 0.45);
+  }
+
+  .got-it-btn:hover {
+    background: #ffffff;
+    border-color: rgba(255, 255, 255, 0.6);
+  }
+
+  .got-it-btn:active {
+    background: #cfcecb;
   }
 
 
@@ -1705,16 +1815,31 @@ html, body {
     border-color: rgba(255, 255, 255, 0.16);
   }
 
+  .word-row small.word-points {
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  .word-row small.word-points.scored {
+    color: #e3e2e0;
+  }
+
   .word-row small,
   .manager-empty,
   .eyebrow,
   .settings-toggle small,
   .settings-field label,
   .settings-field p,
-  .form-grid label,
+  .form-grid label {
+    color: #9b9a97;
+  }
+
+  /* The add-word window's own tokens, kept out of the group above: it is the one
+     surface with no tint of its own over the system blur, so its muted text is
+     white at a measured alpha rather than a fixed grey, one step stronger than
+     the card's `0.66`. See `.quick-add`. */
   .quick-add-field,
   .quick-add-status {
-    color: #9b9a97;
+    color: rgba(255, 255, 255, 0.85);
   }
 
   .confirm-backdrop {
@@ -1736,6 +1861,10 @@ html, body {
     color: #e3e2e0;
   }
 
+  .quick-add-input::placeholder {
+    color: rgba(255, 255, 255, 0.75);
+  }
+
   .suggestion {
     color: #e3e2e0;
   }
@@ -1753,15 +1882,23 @@ html, body {
   .preview-pos,
   .preview-note,
   .preview-vi-label {
-    color: rgba(255, 255, 255, 0.62);
+    color: rgba(255, 255, 255, 0.85);
   }
 
   .preview-vi {
     border-top-color: rgba(255, 255, 255, 0.12);
   }
 
+  .quick-add-preview .sense {
+    color: rgba(227, 226, 224, 0.72);
+  }
+
+  .quick-add-preview .sense strong {
+    color: #e3e2e0;
+  }
+
   .suggestion-tag {
-    color: rgba(255, 255, 255, 0.62);
+    color: rgba(255, 255, 255, 0.85);
   }
 
   .shortcut-recorder {
@@ -1848,9 +1985,7 @@ html, body {
     color: rgba(227, 226, 224, 0.66);
   }
 
-  .translate-btn,
-  .speak-btn,
-  .meaning-step-btn {
+  .translate-btn {
     border-color: rgba(255, 255, 255, 0.2);
     color: #e3e2e0;
   }
@@ -1862,9 +1997,7 @@ html, body {
     color: #191919;
   }
 
-  .translate-btn:hover,
-  .speak-btn:hover,
-  .meaning-step-btn:hover {
+  .translate-btn:hover {
     background: rgba(255, 255, 255, 0.08);
   }
 
@@ -1900,7 +2033,7 @@ html, body {
   }
 
   .vocab-card .translation-status {
-    color: rgba(227, 226, 224, 0.5);
+    color: rgba(227, 226, 224, 0.62);
   }
 
   .vocab-card .translation-status.error {

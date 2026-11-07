@@ -26,6 +26,8 @@ The React frontend renders the popup, manager, and settings screens.
 - Preview the built frontend only: `bun run preview`
 - Check Rust code: `cd src-tauri && cargo check`
 - Format Rust code: `cd src-tauri && cargo fmt`
+- Create the local signing identity, once per machine:
+  `./scripts/create-signing-identity.sh` (see The Signing Identity)
 
 Tauri dev expects Vite on port `1420`. This is configured in `vite.config.ts`
 and `src-tauri/tauri.conf.json`.
@@ -52,6 +54,8 @@ and `src-tauri/tauri.conf.json`.
   guide-word sense groups, and definitions with their examples.
 - `src/components/SettingsPanel.tsx` renders the open-at-login toggle, the
   add-word shortcut, the rotation interval, and the backup path settings UI.
+- `src/components/ui/` holds the shared primitives: `ConfirmDialog`, built on
+  Base UI's `AlertDialog`, and `IconButton`, the popup's quiet icon control.
 - `src/components/ShortcutRecorder.tsx` records a key combination as an
   accelerator string such as `Cmd+Ctrl+Shift+N` and displays it as `⌃⇧⌘N`.
 - `src/components/QuickAdd.tsx` takes a single word and calls `add_vocab_word`,
@@ -76,6 +80,8 @@ and `src-tauri/tauri.conf.json`.
   no database or Tauri dependencies.
 - `src-tauri/src/macos_dictionary.rs` and `src-tauri/native/` read the
   dictionaries installed with macOS; `build.rs` compiles the C bridge.
+- `src-tauri/src/selection.rs` reads the word highlighted in the application in
+  front of Mavoca, through the Accessibility bridge in `native/selection.c`.
 - `src-tauri/src/completion.rs` answers the add-word field's completions from
   the word list macOS installs. Like the parsers, it has no database or Tauri
   dependencies.
@@ -106,6 +112,8 @@ Tables:
   - `word TEXT NOT NULL UNIQUE COLLATE NOCASE`
   - `source TEXT NOT NULL DEFAULT 'manual'` — `macos`, `cambridge`,
     `dictionaryapi`, or `manual`
+  - `points INTEGER NOT NULL DEFAULT 0` — how often the popup's `Got it`
+    button has been pressed on this word; see Points And Rotation
   - `created_at TEXT NOT NULL DEFAULT (datetime('now'))`
   - `updated_at TEXT NOT NULL DEFAULT (datetime('now'))`
 - `vocab_definitions` — one row per definition
@@ -120,6 +128,9 @@ Tables:
   - `definition_vi TEXT NOT NULL DEFAULT ''` — the machine translation of
     `definition`, empty until it has been translated
   - `examples TEXT NOT NULL DEFAULT '[]'` — JSON array of strings
+  - `examples_vi TEXT NOT NULL DEFAULT '[]'` — JSON array of the machine
+    translations of `examples`, positionally matching it; empty until the VI
+    toggle has been pressed on the card
   - `sort_order INTEGER NOT NULL`
 - `settings`
   - `key TEXT PRIMARY KEY`
@@ -131,11 +142,16 @@ on consecutive `guide_word`. The schema does not enforce tree consistency;
 write goes through `save_word_tree`, which wraps the word row and its
 definitions in one transaction.
 
-`definition_vi` is a cache of a translation, not content: it belongs to the
-English text beside it, so `replace_word_definitions` copies the stored value
-across when the definition text is unchanged and leaves it empty otherwise.
-Nothing else in the tree round-trip carries it — the editor neither reads nor
-writes it. Lạc Việt's own senses are never stored; see Translation.
+`definition_vi` and `examples_vi` are caches of translations, not content: each
+belongs to the English text beside it, so `replace_word_definitions` copies the
+stored value across when that English is unchanged and leaves it empty
+otherwise. `CarriedTranslations` holds both across a replace, keyed by English
+text rather than by row id, because SQLite reuses the ids of the rows it just
+deleted. The definition is keyed on its own text; the examples are keyed on
+their **whole JSON array**, since the translations line up positionally and
+editing one example leaves the rest unmatchable by index. Nothing else in the
+tree round-trip carries either — the editor neither reads nor writes them. Lạc
+Việt's own senses are never stored; see Translation.
 
 `PRAGMA foreign_keys = ON` must be set on the connection or the cascade never
 fires and deleting a word leaves orphaned definitions behind.
@@ -146,12 +162,19 @@ the US pronunciation, `meaning` the single definition, and `example` its only
 example. The migration is transactional and idempotent.
 
 A column added later is handled separately, because `CREATE TABLE IF NOT EXISTS`
-leaves an existing table alone: `ensure_definition_vi_column` checks
-`table_columns` and issues an `ALTER TABLE`, once per launch. Add columns that
-way rather than editing the `CREATE` alone, which only new databases would get.
+leaves an existing table alone: `ensure_definition_vi_column`,
+`ensure_examples_vi_column`, and `ensure_points_column` check `table_columns`
+and issue an `ALTER TABLE`, once per launch. Add columns that way rather than editing the `CREATE` alone, which
+only new databases would get. The two `vocab_definitions` columns run inside
+`create_schema`, because `migrate_legacy_vocabs` *writes* definition rows and
+they have to exist by then. `ensure_points_column` runs the other way about,
+*after* that migration rather than inside `create_schema`: it rebuilds `vocabs`
+from scratch, so a column added before it is only lost again. The
+rebuild's own `CREATE TABLE vocabs_migrated` has to keep pace with the current
+`vocabs` shape for the same reason.
 
 The frontend mirrors these shapes in `src/types.ts` using camelCase:
-`VocabWord` holds `entries`, `source`, and `definitionCount`; `VocabCardData` is
+`VocabWord` holds `entries`, `source`, `definitionCount`, and `points`; `VocabCardData` is
 one flattened definition with `definitionId`, `position`, and `total` for the
 popup.
 
@@ -184,6 +207,50 @@ turns it off. `SettingsPanel` repeats the default for its Reset button.
   trap as the autostart plugin.
 - `add_vocab_word` is `async` and does its work in `spawn_blocking`, so the
   quick-add window keeps painting while the dictionary lookup runs.
+
+### The Selected Word
+
+Pressing the shortcut over a highlighted word opens the field on that word, so
+looking one up in another app costs a shortcut rather than a shortcut and a
+copy. Double click a word in Safari, Preview, or an editor, press the shortcut,
+and the word is there with its suggestions and its meaning already showing.
+
+- The read happens in the shortcut handler, **before** `show_quick_add_window`:
+  Mavoca is an agent app, so the other application still has the keyboard at
+  that moment, and once the quick-add window takes the focus the frontmost
+  application is Mavoca itself and there is nothing to read. `recall_selected_word`
+  stores the result in `AppState.pending_selection`; `take_pending_selection`
+  hands it over and clears it, because the window is shown again and again and
+  only the opening behind a press has a selection behind it.
+- `QuickAdd.tsx` asks for it in the focus handler, which is also where the field
+  is emptied, so a new opening starts on the selection rather than on the word
+  left over from last time. The field takes the word selected, so typing replaces
+  it, and anything typed while the answer was on its way is left alone.
+- `selection::single_word` decides what counts as a word: a selection is
+  trimmed of the quotes, brackets, and punctuation an application wraps it in,
+  and is refused outright when it is not exactly one word. A triple click selects
+  a paragraph, and a paragraph is not a word to add.
+- This is the Accessibility API (`AXFocusedApplicationAttribute` →
+  `AXFocusedUIElementAttribute` → `AXSelectedTextAttribute`), so Mavoca needs the
+  Accessibility permission. Without it every call fails and the shortcut opens an
+  empty field, which is exactly what it does when nothing was selected — so the
+  window says so instead of leaving it to silence. `accessibility_trusted` is
+  asked on every opening, not once, because the permission can be granted while
+  the window is hidden; a refusal replaces the hint line with a message and an
+  `open_accessibility_settings` button. The first failed *read* also asks macOS
+  for its own grant dialog, once per launch.
+- The grant belongs to the signature of the binary it was given to, which is why
+  the bundle is signed; see The Signing Identity. Granted to an unsigned build it
+  is pinned to that build's cdhash, and tccd then refuses the next build with
+  `Failed to match existing code requirement for subject com.vocablearning.app`
+  while System Settings still shows the toggle switched on. Flipping the toggle
+  does not mend it: the stale entry has to be removed with `-`, or reset with
+  `sudo tccutil reset Accessibility com.vocablearning.app`, and the app
+  relaunched. `AXIsProcessTrusted` is answered from a per-process cache, so a
+  grant given to a running instance may not be seen until it restarts.
+- The calls are synchronous IPC into the other application, so the system-wide
+  element is given a short `AXUIElementSetMessagingTimeout`: a stalled
+  application must not hold the key press.
 
 ## Add Word Suggestions
 
@@ -247,12 +314,79 @@ has to be given up to answer "what does this mean?".
 - The pane shows `PREVIEW_DEFINITIONS` (4) definitions with their guide words and
   part of speech, and `total` behind them for "N more definitions when added".
   `VocabCard` is where the whole tree is read.
+- It answers in Vietnamese too, because that is what a quick lookup is for: the
+  same `vietnamese::lac_viet_meaning` the popup uses, under a `Lạc Việt · danh từ`
+  label, three senses and a `+N more` count (`PREVIEW_SENSES`). The part of speech
+  comes from the first previewed definition, and a word the English sources
+  missed — `source: "none"` — passes none, so every Lạc Việt group is offered
+  rather than none. That is often the only thing the pane can say about such a
+  word, and why the section renders outside the English one.
+- Nothing is ranked and no sense is marked: the preview has no translation of its
+  own definition, so the order is Lạc Việt's own and `ranked` is always false. A
+  saved word it does not carry falls back to the stored `definitionVi`, which is
+  the one thing there that belongs to the definition above it.
+- Lạc Việt is read in the same `spawn_blocking` as the fetch, so the pane still
+  arrives in one round trip; it is a local dictionary read and adds nothing
+  measurable to the online path. `.quick-add-preview` scrolls past
+  `QUICK_ADD_MAX_HEIGHT` instead of letting a long entry lose its last sense off
+  the bottom of the window.
 - The window widens while a meaning is shown: `resize_quick_add_window` takes a
   width as well as a height and clamps it to
   `QUICK_ADD_WIDTH..QUICK_ADD_MAX_WIDTH` (420..780). `QuickAdd.tsx` measures both
   from `.quick-add-content`, which is `width: max-content` so it reports the room
   the columns need rather than the width of the window, and hides the pane again
   when the list closes, back to 420.
+- The window grows to fit the meaning, not the list: `QUICK_ADD_MAX_HEIGHT` is
+  640, the room four definitions and the Lạc Việt entry under them need, and the
+  height is clamped to the room left on screen below the window's own top edge
+  (`QUICK_ADD_SCREEN_MARGIN`), the same clamp `resize_popup` makes. A screen too
+  short for that scrolls `.quick-add` rather than cutting the entry off.
+- `.quick-add-preview` caps itself at a **fixed** `max-height: 600px` — the 640
+  less the window's 40px of padding — and never at `calc(100vh - …)`. A
+  viewport-sized cap measures against the window as it is now, so the content
+  can never report itself taller than the window and the window can never grow;
+  that deadlock is why the number is fixed. The pane is what the window is sized
+  from, so a list has never been enough to size it.
+
+## Points And Rotation
+
+A word carries a score, and rotation leans on it: the words you have not
+confirmed come up far more often than the ones you have.
+
+- The popup's footer has one primary button, `Got it`. It adds a point to the
+  word on screen and draws the next word in the same round trip
+  (`award_vocab_point`), so the popup can be run down like a quick self-test.
+  There is no button that subtracts.
+- The score belongs to the **word**, not to the definition: `vocabs.points`.
+  Definition rows are replaced wholesale on every manager save and re-fetch, so
+  a score kept there would need the carry-over `definition_vi` does, and would
+  still be lost whenever a definition was re-worded. `save_word_tree` touches
+  only `word`, `source`, and `updated_at`, so points survive a resave for free —
+  there is a test holding that.
+- The score is shown in the **manager list**, not on the card. The popup stays
+  a card; pressing the button moves to the next word, and that is the feedback.
+- `weighted_pick` draws one candidate in proportion to `draw_weight`, which is
+  `1 / (points + 1)`: a word at 0 comes up twice as often as one at 1 and four
+  times as often as one at 3. Nothing ever falls to zero chance, which is the
+  point — a mastered word still has to resurface. `roll` is the only randomness
+  and is passed in, so the draw is a pure function the tests pin down;
+  `clock_roll` supplies it from the sub-second clock at runtime, the same
+  reasoning the old modulo shuffle rested on.
+- The draw is per **word**, landing on its first definition, so a word with
+  twenty definitions does not flood the rotation. `weighted_next_index` finds
+  the first card of each word the way `step_vocab_word` finds boundaries — a run
+  of cards sharing a `vocab_id` — and leaves the word on screen out of the pool
+  while there is another to pick, so a tick always visibly moves.
+- Auto-rotation, the tray's shuffle, and `Got it` all draw this way. The ‹ ›
+  stepper does not, and the footer's ← → only fall back to their list-order
+  walk once their history stack is empty; the arrows themselves never draw by
+  weight.
+- Awarding a point deliberately does **not** bump `updated_at` or sync the
+  backup. A point is not content, and the backup is a whole-database
+  `VACUUM INTO`; the button is made to be pressed in bursts, so points reach
+  Dropbox with the next real change. It does emit `vocab-list-changed`, and it
+  bumps the cached `vocab_list` in place rather than reloading — a reload would
+  rebuild the card list and move the rotation out from under the popup.
 
 ## Backup Behavior
 
@@ -362,7 +496,16 @@ the definition stepper, and the Vietnamese entry below it does not follow it.
 They are separate on purpose. Lạc Việt numbers its senses its own way, merges
 homographs under one part of speech, and has no notion of the guide words
 Cambridge uses, so no sense it holds can be called the translation of the
-definition on screen. Examples stay in English.
+definition on screen.
+
+The examples are translated too, but only behind the VI toggle
+(`translate_examples`). The definition is translated eagerly because its
+translation is what orders the Lạc Việt senses; the examples order nothing, so
+translating them with every card would put sentences nobody has asked to read
+through the translator on every rotation tick. They go through one translator
+session for the whole list (`vietnamese::translate_texts`) rather than one
+round trip each, and a partial result is not stored — the next press should
+retry what failed rather than read back a gap.
 
 - `src-tauri/src/vietnamese.rs` implements both halves, and the popup asks for
   them separately: `lac_viet_meaning(word, part_of_speech, definition_id)` and
@@ -395,7 +538,8 @@ definition on screen. Examples stay in English.
 - Phrasal verbs are not special-cased for Lạc Việt: a card whose part of speech
   is `phrasal verb` matches on the `verb` it contains.
 - The translated definition is **stored**, in `vocab_definitions.definition_vi`,
-  so a card is translated once per definition. Lạc Việt's senses are **not**
+  and the translated examples in `examples_vi` beside it, so each is translated
+  once ever. Lạc Việt's senses are **not**
   stored: Từ điển Lạc Việt is licensed, its text does not line up with the rows,
   and `VACUUM INTO` copies the whole database into Dropbox. Only machine output
   for our own English text is written.
@@ -422,7 +566,9 @@ definition on screen. Examples stay in English.
 - `App.tsx` keys `VocabCard` by card, so a new card starts untranslated.
   `VocabCard` keeps a session cache keyed by word, part of speech, and
   definition, so stepping through a word's definitions keeps the translation it
-  already fetched instead of blanking until Rust answers again.
+  already fetched instead of blanking until Rust answers again. The examples
+  have a second cache beside it, keyed on the examples themselves rather than
+  on the card, for the positional reason above.
 - The translation is fetched as soon as the card is visible, not when VI is
   pressed: it is what orders the Lạc Việt senses, and it is stored once. Cards
   mounted while the popup is hidden are skipped, so the rotation does not
@@ -460,6 +606,29 @@ Mavoca is a menu bar extra, not an app in the Dock.
   the `NSPanel` rather than converting an existing window, which needs the
   window to come from `tauri-nspanel` or from our own `NSWindow` rather than
   from `WebviewWindowBuilder`.
+
+## The Signing Identity
+
+`bundle.macOS.signingIdentity` is `Mavoca Local Signing`, a self-signed
+certificate trusted for code signing in the login keychain.
+`scripts/create-signing-identity.sh` creates it, once per machine; `bun run tauri
+build` fails without it rather than quietly falling back.
+
+It is there for TCC, not for Gatekeeper. Left unsigned, the bundle carries only
+the linker's ad-hoc signature — `Signature=adhoc`, `linker-signed`,
+`Sealed Resources=none`, `Info.plist=not bound`, and a linker-generated
+`Identifier=mavoca-<hash>` rather than the bundle id. With no certificate there
+is no stable designated requirement to store, so TCC pins the Accessibility
+grant to the binary's exact cdhash and every rebuild voids it silently. Signed,
+the requirement names the identifier and the certificate leaf, and the grant
+survives a rebuild.
+
+`hardenedRuntime` is off. It buys nothing for an app that is not notarized, and
+it turns on library validation, which a certificate with no team identifier has
+no business promising.
+
+Do not notarize or re-sign the bundle with a different identity casually: each
+change of identity is a new grant.
 
 ## Tray And Window Behavior
 
@@ -503,6 +672,15 @@ Mavoca is a menu bar extra, not an app in the Dock.
   reason. Note that a position set from the main thread is applied by the event
   loop after the command returns: reading `outer_position` in the same breath
   shows the stale one, which is not a positioning failure.
+- The item is exactly as wide as the title, so the anchor moves every time the
+  title does: stepping from `amenity` to `mellifluous` walks the item's centre
+  left and a popup left where the previous word put it sits off its own item.
+  `update_tray_title` therefore ends with `follow_tray_item`, which re-anchors a
+  popup that is already open through the same `position_popup_under_tray`. It is
+  posted to the main queue rather than run inline — the rotation thread changes
+  the title too, and posting lets the item lay itself out at the new width
+  first — and it does nothing while the popup is hidden, which is re-anchored
+  when it is shown.
 - The popup fits its card. `usePopupAutoResize` watches the card with a
   `ResizeObserver` and calls `resize_popup`, which clamps the height between
   `POPUP_MIN_HEIGHT` and `POPUP_MAX_HEIGHT` and to the room left on screen;
@@ -515,26 +693,40 @@ Mavoca is a menu bar extra, not an app in the Dock.
   window can never shrink. The 6px inset that `usePopupAutoResize` adds to the
   card belongs to `.app-body`, the card's parent, which is where the hook reads
   it from.
-- Auto-rotation steps to the next definition every `rotation_interval_secs`
-  seconds (default `DEFAULT_ROTATION_INTERVAL_SECS`, 10; 0 turns it off),
-  counting only time the popup is hidden: opening the popup resets the count,
-  so the word never changes the moment it closes. The thread checks once per
+- Auto-rotation draws the next word every `rotation_interval_secs` seconds
+  (default `DEFAULT_ROTATION_INTERVAL_SECS`, 10; 0 turns it off), counting only
+  time the popup is hidden: opening the popup resets the count, so the word
+  never changes the moment it closes. The thread checks once per
   `ROTATION_TICK` and reads the interval from `AppState`, so a change in
-  Settings applies without a restart.
-- The rotation unit is a single definition, not a word. Rust owns the flattened
-  card list in `AppState.cards`, and `current_index` indexes into it. The two
-  ways of moving are separate on purpose:
+  Settings applies without a restart. The draw is weighted by the word's
+  points; see Points And Rotation.
+- The browsing unit is a single definition, not a word. Rust owns the flattened
+  card list in `AppState.cards`, and `current_index` indexes into it. Both of
+  these are sequential, unlike the automatic draw, and they are separate from
+  each other on purpose:
   - The ‹ › buttons beside the popup's `1 of 3` counter walk the definitions of
     the current word and wrap within it; `useVocab` turns them into
     `step_vocab_card` deltas. They sit on the card's word line, above the part
     of speech and the transcription, because a step changes those as well as the
     definition text.
-  - The footer's ← → move between words, skipping whatever is left of the
-    current word's definitions and landing on the first definition of the next
-    or previous one, wrapping at both ends. A word is a run of cards sharing a
-    `vocab_id`, so `step_vocab_word` finds the boundary in `word_step_index`
-    rather than counting positions — the card it starts from may be any of the
-    word's definitions.
+  - The footer's ← → move between words. They walk a browser-style history
+    first: ← returns to the word that was actually on screen last, and → the
+    word that back step walked past, so a weighted draw (shuffle, `Got it`,
+    rotation) can be undone instead of stepped over. When the stack in that
+    direction is empty they fall back to list order, skipping whatever is left
+    of the current word's definitions and landing on the first definition of
+    the next or previous word, wrapping at both ends. A word is a run of cards
+    sharing a `vocab_id`, so the fallback finds the boundary in
+    `word_step_index` rather than counting positions. History entries are
+    `CardRef`s — `vocab_id` plus the definition's `position`, because every
+    vocabulary change rebuilds the card list and shifts indices — and are
+    dropped when the word no longer exists. `HISTORY_LIMIT` (50) caps each
+    stack.
+  - Automatic rotation is not browsing and does not fill the history. Its first
+    tick after the popup hides parks the card that was on screen in
+    `AppState.hidden_from`; showing the popup turns that into the back entry,
+    so ← after reopening returns to the word you last saw rather than to the
+    alphabetical neighbour of the word rotation drew.
 - `AppState.cards` and `AppState.current_index` are never locked at the same
   time. Keep it that way.
 
@@ -553,12 +745,26 @@ Mavoca is a menu bar extra, not an app in the Dock.
 - Keep the popup compact and transparent/vibrancy-friendly.
 - The popup window is 320px wide. Judge a card layout at that width, not in a
   wide browser window: a row that fits at 1000px wraps in the real popup.
-- The card header changes as one unit. The ‹ `1 of 3` › stepper sits on the
-  word's line, and the part-of-speech badge with the pronunciation row sits
-  under it, because a step replaces all of them: the badge and the
-  transcription belong to the definition on screen, not to the word.
-  `--meta-btn-size` lives on `.vocab-card` rather than `.card-meta`, since the
-  stepper moved out of that row and still has to match the VI toggle.
+- The card header changes as one unit: `.word-line` carries the word and the
+  part-of-speech badge inline beside it, the ‹ `1 of 3` › stepper closes that
+  row, and `.word-pronunciation` sits under it. A step replaces all of them,
+  because the badge and the transcription belong to the definition on screen,
+  not to the word. The line wraps, so a long word drops the badge rather than
+  pushing it off the 320px card.
+- The VI toggle sits on the English section's heading, in `.section-header`,
+  because that is the section it changes — it adds the Vietnamese under the
+  definition and its examples. Give any future section control the same
+  treatment rather than a row of its own.
+- `--meta-btn-size` (20px, on `.vocab-card` beside the icon-button paddings) is
+  the height of the VI toggle and the `.category` badge, which share it along
+  with their 10px type and `0 6px` padding even though they no longer sit on
+  one line. The badge keeps the lighter weight — it is a label, not a control.
+  `.section-header` takes its `min-height` from the same variable, so a
+  heading with a control is as tall as the control and the label is centred
+  against it. The stepper's carets are `IconButton` `small`, which arrives at
+  the same 20px on its own.
+- `.card-meta` is left holding only the guide word, and is not rendered at all
+  when the card has none: an empty row would still spend the card's gap.
 - The pronunciation row (`.word-pronunciation`) shows the card's `pronUk` and
   `pronUs` as accent-labelled chips, each with its own speak button so each is
   read in its own accent. Equal values collapse to a single chip, and a word
@@ -570,12 +776,73 @@ Mavoca is a menu bar extra, not an app in the Dock.
   English and Tiếng Việt, divided by a hairline. A step replaces the English
   section and leaves the Vietnamese one in place: it is the entry's meaning,
   not the definition's, so it must not move with the stepper.
+- The examples sit **inside** the English section, under the definition they
+  illustrate, with a quieter `.section-sublabel` rather than a second
+  `.section-label` — two identical headings in one section would read as two
+  sections. They step with the definition, which is why they are nested rather
+  than divided off below. Space separates them, not a hairline; a hairline
+  inside a section claims to end it.
+- The definitions and the Lạc Việt senses are all 14px/1.6 — the card's body
+  text is one size. The translated definition simply inherits `.meaning p`.
+  Dropping the Vietnamese a size below the English made it read as a footnote
+  to the English rather than as the same sentence.
 - A Lạc Việt sense is shown as a bulleted `.sense` with its headline in bold and
   the explanation after it, three at a time under a `+N more` toggle
   (`SENSES_SHOWN`). Only the first sense is filled in, and only when the
   translated definition ranked it there — do not present a sense as *the*
   translation, because it is not one.
-- Primary buttons should use a solid background.
+- Primary buttons should use a solid background. The popup footer has exactly
+  one: `Got it`, which is also the only labelled button there. It sits on the
+  right, opposite the navigation, and is the same height as the icon buttons —
+  it earns its weight from the fill and the label, not from size.
+- Every icon-only control in the popup is an `IconButton`
+  (`src/components/ui/IconButton.tsx`): no border, no fill, and a background
+  only under the pointer. `medium` is the footer's navigation (previous, next,
+  random); `small` is everything sitting in a line of text — the definition
+  stepper's carets and both speakers. Use it for any new icon-only control
+  rather than restyling a button in place.
+- An `IconButton`'s padding is cancelled by an equal negative margin
+  (`--icon-btn-pad`, `--icon-btn-pad-sm` on `.vocab-card`, with fallbacks in
+  the rule so the component stands alone elsewhere). The pointer gets something
+  to hit, while the layout is charged only for the glyph, so icons line up with
+  the text and the card edge beside them instead of sitting indented. The
+  consequence to remember: **between two of them a `gap` is the distance
+  between the glyphs, not between their boxes** — `.control-group`,
+  `.meaning-stepper`, `.word-line`, and `.pronunciation` all set their gap in
+  those terms, and a row that forgets this will have its buttons overlap.
+- The popup has no way into the manager. It is a 320px card and the tray menu
+  already carries `Vocabulary Manager`, so that is the single way in; do not
+  add a button back to the card without moving something else out.
+- Muted text is measured, not guessed. Labels and metadata in the popup sit at
+  4.5:1 or better against the vibrancy behind the card, which is `0.7` ink in
+  light mode and `0.62`-`0.66` white in dark; the card's `1 of 3` counter, its
+  guide word, its `+N more` toggle, the dictionary source and the translation
+  status are all in that group. The part-of-speech badges mix their hue toward
+  the ink in light mode (72%) and toward white in dark (85%), because as text on
+  their own 16% tint several hues sat at 3.4-4.3:1. Reducing that tint instead
+  (16% → 10%) only reached 3.67:1, so the text is the lever, not the background.
+  Keep the hierarchy in size, weight and case instead of dropping below that
+  floor.
+- The add-word window keeps the system blur: `.quick-add` is transparent, so the
+  panel is `NSVisualEffectMaterial::Popover` over whatever is behind it, the
+  surface the popup card sits on. Its contrast is the text's job, which is why
+  its tokens are a step stronger than the card's: `0.8` ink in light mode and
+  white at `0.85` in dark, for the icon, the status line, the `saved` tags, the
+  preview's `-meta`, `-pos`, `-note` and `-vi-label`, and the guide words. Do not
+  put a tint back on the panel to buy contrast: a `0.9` tint was there once and
+  it did reach 5:1, at the cost of the frost the window exists for. Know the
+  limit instead — in dark mode over a bright document the blur settles at a mid
+  grey (`128,128,127` measured), where white at `0.85` is 3.4:1 and even pure
+  white only reaches 4.5:1, so that panel cannot meet the floor by text alone.
+  Light mode over the same page is a light frost and clears it (5.6:1).
+- The placeholder is styled too (`.quick-add-input::placeholder`, `0.75` in both
+  themes). WebKit's own placeholder is a fixed grey: it is invisible on the dark
+  panel and loud on the light one, and it is the first thing the window says.
+- The add-word window is sized from the meaning pane, never from the list, and
+  every cap on it is a fixed number of pixels, never `calc(100vh - …)`: a
+  viewport-sized cap measures against the window as it is now, so the content
+  can never report itself taller than the window and the window can never grow.
+  See Preview under Add Word Suggestions for the numbers.
 - Never use `window.confirm`, `alert`, or `prompt`. The macOS webview does
   not implement them: `confirm` returns false without showing anything, so the
   action silently never happens. Use `ConfirmDialog` in `src/components/ui/`,
@@ -628,8 +895,12 @@ bun run build
 ```
 
 `cargo test` covers the legacy migration, the tree round-trip through SQLite,
-the delete cascade, card flattening, and the dictionary parsers. Run it after any change
-to the schema, the tree model, or the dictionary parsing.
+the delete cascade, card flattening, the dictionary parsers, and what counts as
+one word for the selected-word fill. Run it after any change to the schema, the
+tree model, the dictionary parsing, or `selection.rs`.
 
 Use `bun run tauri dev` when behavior must be verified interactively in the
-real macOS menu bar app.
+real macOS menu bar app. `tauri dev` runs the debug binary, which is a different
+`Info.plist` and a different signature from the bundle, so anything that depends
+on the bundle — the Accessibility grant behind the selected word, for instance —
+has to be checked in the installed app.

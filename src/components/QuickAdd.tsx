@@ -9,6 +9,8 @@ import { PreviewDefinition, VocabWord, WordPreview, WordSuggestion } from '../ty
 const SUGGEST_DEBOUNCE_MS = 180;
 /** The pane follows the arrow keys, so its lookup waits for a moment's rest. */
 const PREVIEW_DEBOUNCE_MS = 120;
+/** Senses shown before the count takes over; the pane resizes with the window. */
+const PREVIEW_SENSES = 3;
 /** Below two letters every list is noise. */
 const MIN_PREFIX_LEN = 2;
 
@@ -59,6 +61,8 @@ export const QuickAdd: React.FC = () => {
   const [preview, setPreview] = useState<WordPreview | null>(null);
   /** The word whose list was dismissed, so it does not reopen until the next edit. */
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
+  /** Whether the selected word can be read at all; null until Rust has answered. */
+  const [axTrusted, setAxTrusted] = useState<boolean | null>(null);
   /** Answers to superseded lookups are ignored rather than shown late. */
   const latestLookup = useRef(0);
   /** A meaning is looked up once per word per opening, not once per arrow key. */
@@ -84,6 +88,27 @@ export const QuickAdd: React.FC = () => {
       previewCache.current.clear();
       if (focused) {
         inputRef.current?.focus();
+        // The shortcut reads the word highlighted in the app in front of us
+        // before this window takes the focus, so opening it over a highlighted
+        // word starts on that word. It is selected, so typing replaces it.
+        // Asked on every opening, not once: the permission can be granted while
+        // the window is hidden, and the warning has to go away by itself.
+        invoke<boolean>('accessibility_trusted')
+          .then(setAxTrusted)
+          .catch(() => setAxTrusted(null));
+        invoke<string | null>('take_pending_selection')
+          .then((selected) => {
+            const input = inputRef.current;
+            // Never overwrite something typed while the answer was on its way.
+            if (!selected || !input || input.value) {
+              return;
+            }
+            setWord(selected);
+            requestAnimationFrame(() => inputRef.current?.select());
+          })
+          .catch((err) => {
+            console.error('Failed to read the selected word', err);
+          });
       }
     });
     return () => {
@@ -255,6 +280,12 @@ export const QuickAdd: React.FC = () => {
     current.definitions.every(
       (definition) => definition.partOfSpeech === current.definitions[0].partOfSpeech,
     );
+  // The pane is a quick lookup, so it answers in Vietnamese as well: Lạc Việt
+  // has most words, and where it does not, a saved word still has the stored
+  // translation of the definition above it.
+  const lacViet = current?.lacViet ?? null;
+  const senses = (lacViet?.senses ?? []).slice(0, PREVIEW_SENSES);
+  const hiddenSenses = (lacViet?.senses.length ?? 0) - senses.length;
 
   return (
     <main className="quick-add" ref={mainRef}>
@@ -311,8 +342,39 @@ export const QuickAdd: React.FC = () => {
                 )}
               </Autocomplete.List>
             )}
-            <p className={error ? 'quick-add-status error' : 'quick-add-status'}>
-              {error ?? (busy ? 'Looking up meanings…' : 'Enter to add · Tab to complete · Esc to close')}
+            {/* The missing permission is said here rather than left to silence:
+                without it the shortcut opens an empty field, which is exactly
+                what it does when nothing was selected. It yields to the error
+                and to the lookup, both of which are about the word in hand. */}
+            <p
+              className={
+                error || (!busy && axTrusted === false)
+                  ? 'quick-add-status error'
+                  : 'quick-add-status'
+              }
+            >
+              {error ??
+                (busy ? (
+                  'Looking up meanings…'
+                ) : axTrusted === false ? (
+                  <>
+                    No Accessibility access, so the selected word can't be read.{' '}
+                    <button
+                      type="button"
+                      className="quick-add-status-action"
+                      // A click that took the focus out of the field would close
+                      // the window through the blur handler.
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        void invoke('open_accessibility_settings');
+                      }}
+                    >
+                      Open Settings
+                    </button>
+                  </>
+                ) : (
+                  'Enter to add · Tab to complete · Esc to close'
+                ))}
             </p>
           </div>
           {highlighted && (
@@ -363,13 +425,37 @@ export const QuickAdd: React.FC = () => {
                       {current.total - current.definitions.length} more definitions when added.
                     </p>
                   )}
-                  {current.definitionVi && (
-                    <p className="preview-vi">
+                </>
+              )}
+              {current && (senses.length > 0 || current.definitionVi) && (
+                <div className="preview-vi">
+                  {senses.length > 0 ? (
+                    <>
+                      <span className="preview-vi-label">
+                        Lạc Việt
+                        {lacViet?.partOfSpeechLabel ? ` · ${lacViet.partOfSpeechLabel}` : ''}
+                      </span>
+                      {/* No sense is marked: the pane has no translation to rank
+                          them against, so the order is Lạc Việt's own. */}
+                      <ul className="sense-list">
+                        {senses.map((sense, index) => (
+                          <li className="sense" key={`${index}-${sense.headline}`}>
+                            <strong>{sense.headline}</strong>
+                            {sense.explanation && ` ${sense.explanation}`}
+                          </li>
+                        ))}
+                      </ul>
+                      {hiddenSenses > 0 && (
+                        <p className="preview-note">+{hiddenSenses} more</p>
+                      )}
+                    </>
+                  ) : (
+                    <>
                       <span className="preview-vi-label">Tiếng Việt</span>
                       {current.definitionVi}
-                    </p>
+                    </>
                   )}
-                </>
+                </div>
               )}
             </aside>
           )}

@@ -76,6 +76,10 @@ pub struct VocabWord {
     pub source: WordSource,
     pub entries: Vec<VocabEntry>,
     pub definition_count: usize,
+    /// How many times the popup's "Got it" button has been pressed on this
+    /// word. Rotation weights a word by `1 / (points + 1)`, so this is what
+    /// keeps the words you already know out of the way of the ones you don't.
+    pub points: i64,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
 import { ScrollArea } from '@base-ui/react/scroll-area';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useVocab } from './hooks/useVocab';
@@ -20,6 +19,7 @@ function LearningApp() {
     getPreviousWord,
     getNextMeaning,
     getPreviousMeaning,
+    markRemembered,
     reload
   } = useVocab();
 
@@ -51,7 +51,7 @@ function LearningApp() {
               onNextMeaning={getNextMeaning}
               onPreviousMeaning={getPreviousMeaning}
               onRandom={getRandomWord}
-              onManage={() => invoke('show_manager_window')}
+              onRemembered={markRemembered}
             />
           </div>
         </ScrollArea.Viewport>

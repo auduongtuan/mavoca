@@ -3,12 +3,13 @@ mod dictionary;
 #[cfg(target_os = "macos")]
 mod macos_dictionary;
 mod model;
+mod selection;
 mod translator;
 mod vietnamese;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -37,7 +38,13 @@ const QUICK_ADD_HEIGHT: f64 = 94.0;
 /// The quick-add window widens by this much while it shows a meaning beside the
 /// list, and no further than that.
 const QUICK_ADD_MAX_WIDTH: f64 = 780.0;
-const QUICK_ADD_MAX_HEIGHT: f64 = 420.0;
+/// Tall enough for the meaning pane rather than for the list: four definitions
+/// and the Lạc Việt entry under them is about 640, which is what the window is
+/// for. The pane's own `max-height` is the same number less the window's
+/// padding, and it scrolls, so an entry longer than that still reads instead of
+/// being cut off.
+const QUICK_ADD_MAX_HEIGHT: f64 = 640.0;
+const QUICK_ADD_SCREEN_MARGIN: f64 = 12.0;
 /// Definitions the add-word preview shows before it counts the rest.
 const PREVIEW_DEFINITIONS: usize = 4;
 
@@ -55,6 +62,10 @@ const MAX_SUGGESTIONS: usize = 6;
 /// How often the rotation thread checks the popup and the interval, so a new
 /// interval or a closed popup takes effect within a second.
 const ROTATION_TICK: Duration = Duration::from_secs(1);
+/// Words each of the footer's back and forward stacks remembers. An entry is
+/// two integers, so the cap is about keeping "back" within the browsing the
+/// user still remembers, not about memory.
+const HISTORY_LIMIT: usize = 50;
 /// Logical popup width; matches `width` for the `main` window in tauri.conf.json.
 const POPUP_WIDTH: f64 = 320.0;
 /// The popup grows to fit its card between these heights, then scrolls.
@@ -81,19 +92,95 @@ struct AppSettings {
     rotation_interval_secs: u64,
 }
 
+/// A card's place in the rotation in a form that survives a rebuild.
+///
+/// Every vocabulary change rebuilds the card list, and a word added or deleted
+/// shifts the index of every card after it. History therefore remembers the
+/// word and the definition's position within it, not the index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CardRef {
+    vocab_id: i64,
+    position: usize,
+}
+
+impl CardRef {
+    fn of(card: &VocabCard) -> Self {
+        Self {
+            vocab_id: card.vocab_id,
+            position: card.position,
+        }
+    }
+}
+
+/// The words the popup has walked through, browser-style.
+///
+/// `back` holds the words a move forward left behind, most recent last.
+/// `forward` holds what a back step left behind, so → retraces that step
+/// instead of walking on past the word it returned from.
+#[derive(Default)]
+struct NavigationHistory {
+    back: VecDeque<CardRef>,
+    forward: VecDeque<CardRef>,
+}
+
+impl NavigationHistory {
+    /// Records a jump that is not part of walking the history — a shuffle, a
+    /// point, a word added — so ← returns to the word that was on screen.
+    fn record(&mut self, departed: CardRef) {
+        push_capped(&mut self.back, departed);
+        self.forward.clear();
+    }
+
+    fn take_back(&mut self) -> Option<CardRef> {
+        self.back.pop_back()
+    }
+
+    fn take_forward(&mut self) -> Option<CardRef> {
+        self.forward.pop_back()
+    }
+
+    /// Pushes the card a history step leaves behind onto the opposite stack,
+    /// which is what makes the arrow that undoes the step come back to it.
+    fn after_move(&mut self, departed: CardRef, back: bool) {
+        if back {
+            push_capped(&mut self.forward, departed);
+        } else {
+            push_capped(&mut self.back, departed);
+        }
+    }
+}
+
+fn push_capped(stack: &mut VecDeque<CardRef>, entry: CardRef) {
+    if stack.len() == HISTORY_LIMIT {
+        stack.pop_front();
+    }
+    stack.push_back(entry);
+}
+
 #[derive(Clone)]
 struct AppState {
     db: Arc<Mutex<Connection>>,
     vocab_list: Arc<Mutex<Vec<VocabWord>>>,
     /// Flattened rotation list: one element per definition, rebuilt whenever
     /// the vocabulary changes. `current_index` indexes into this, not into
-    /// `vocab_list`, which is what makes prev/next step definition by
-    /// definition rather than word by word.
+    /// `vocab_list`, which is what lets the card's stepper walk definitions
+    /// rather than words.
     cards: Arc<Mutex<Vec<VocabCard>>>,
     current_index: Arc<Mutex<usize>>,
+    /// What the footer's ← and → walk, independent of the rotation order.
+    history: Arc<Mutex<NavigationHistory>>,
+    /// The card auto-rotation drew away from while the popup was hidden. It is
+    /// not history yet: rotation ticks are not browsing, but the word last seen
+    /// before closing still has to be the first ← away after reopening.
+    hidden_from: Arc<Mutex<Option<CardRef>>>,
     is_window_visible: Arc<Mutex<bool>>,
     /// Mirrors the `rotation_interval_secs` setting for the rotation thread.
     rotation_interval_secs: Arc<AtomicU64>,
+    /// The word selected in the app in front of us when the add-word shortcut
+    /// was pressed. Read before the window takes focus, because after that
+    /// there is no other app to read it from, and taken by the window when it
+    /// opens so a later opening does not reuse it.
+    pending_selection: Arc<Mutex<Option<String>>>,
 }
 
 fn load_seed_vocab() -> Vec<SeedVocabWord> {
@@ -193,6 +280,7 @@ fn init_database(app: &tauri::AppHandle) -> Result<Connection, String> {
 
     create_schema(&conn)?;
     migrate_legacy_vocabs(&conn)?;
+    ensure_points_column(&conn)?;
     ensure_default_settings(&conn)?;
     seed_if_empty(&conn)?;
 
@@ -208,6 +296,7 @@ fn create_schema(conn: &Connection) -> Result<(), String> {
             id INTEGER PRIMARY KEY,
             word TEXT NOT NULL UNIQUE COLLATE NOCASE,
             source TEXT NOT NULL DEFAULT 'manual',
+            points INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -223,6 +312,7 @@ fn create_schema(conn: &Connection) -> Result<(), String> {
             definition TEXT NOT NULL,
             definition_vi TEXT NOT NULL DEFAULT '',
             examples TEXT NOT NULL DEFAULT '[]',
+            examples_vi TEXT NOT NULL DEFAULT '[]',
             sort_order INTEGER NOT NULL
         );
 
@@ -237,7 +327,8 @@ fn create_schema(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|err| format!("Failed to initialize database: {err}"))?;
 
-    ensure_definition_vi_column(conn)
+    ensure_definition_vi_column(conn)?;
+    ensure_examples_vi_column(conn)
 }
 
 /// `definition_vi` arrived after the first databases were created, and SQLite
@@ -258,6 +349,55 @@ fn ensure_definition_vi_column(conn: &Connection) -> Result<(), String> {
         [],
     )
     .map_err(|err| format!("Failed to add the Vietnamese definition column: {err}"))?;
+
+    Ok(())
+}
+
+/// `points` arrived after the first databases were created, the same problem
+/// `definition_vi` has: `CREATE TABLE IF NOT EXISTS` leaves an existing table
+/// alone, so an older database needs the `ALTER TABLE`.
+///
+/// Unlike that one this runs *after* `migrate_legacy_vocabs`, which rebuilds
+/// `vocabs` from scratch: adding the column before the rebuild would only lose
+/// it again.
+fn ensure_points_column(conn: &Connection) -> Result<(), String> {
+    if table_columns(conn, "vocabs")?
+        .iter()
+        .any(|column| column == "points")
+    {
+        return Ok(());
+    }
+
+    conn.execute(
+        "ALTER TABLE vocabs ADD COLUMN points INTEGER NOT NULL DEFAULT 0",
+        [],
+    )
+    .map_err(|err| format!("Failed to add the points column: {err}"))?;
+
+    Ok(())
+}
+
+/// `examples_vi` arrived with `definition_vi`'s problem and is handled the same
+/// way. It holds the JSON array of translated examples, positionally matching
+/// `examples`, and like the definition translation it is a cache: an empty
+/// array only costs another translation.
+///
+/// This runs inside `create_schema`, before the legacy migration, because that
+/// migration *writes* definition rows — the column has to exist by then.
+fn ensure_examples_vi_column(conn: &Connection) -> Result<(), String> {
+    if table_columns(conn, "vocab_definitions")?
+        .iter()
+        .any(|column| column == "examples_vi")
+    {
+        return Ok(());
+    }
+
+    conn.execute(
+        "ALTER TABLE vocab_definitions \
+         ADD COLUMN examples_vi TEXT NOT NULL DEFAULT '[]'",
+        [],
+    )
+    .map_err(|err| format!("Failed to add the Vietnamese examples column: {err}"))?;
 
     Ok(())
 }
@@ -361,7 +501,7 @@ fn migrate_legacy_vocabs(conn: &Connection) -> Result<(), String> {
                 }],
             }];
 
-            insert_definition_rows(conn, row.id, &entries, &HashMap::new())?;
+            insert_definition_rows(conn, row.id, &entries, &CarriedTranslations::default())?;
         }
 
         conn.execute_batch(
@@ -370,6 +510,7 @@ fn migrate_legacy_vocabs(conn: &Connection) -> Result<(), String> {
                 id INTEGER PRIMARY KEY,
                 word TEXT NOT NULL UNIQUE COLLATE NOCASE,
                 source TEXT NOT NULL DEFAULT 'manual',
+                points INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -441,7 +582,12 @@ fn seed_if_empty(conn: &Connection) -> Result<(), String> {
             .map_err(|err| format!("Failed to seed vocabulary: {err}"))?;
 
         if inserted > 0 {
-            insert_definition_rows(conn, conn.last_insert_rowid(), &entries, &HashMap::new())?;
+            insert_definition_rows(
+                conn,
+                conn.last_insert_rowid(),
+                &entries,
+                &CarriedTranslations::default(),
+            )?;
         }
     }
 
@@ -573,20 +719,34 @@ fn sync_database_backup(conn: &Connection) -> Result<(), String> {
 /// Writes a tree as ordered definition rows. This is the only place
 /// `entry_index` and `sort_order` are assigned, which is what keeps the tree
 /// well-formed given the schema does not enforce it.
+/// What a word's rows carry that belongs to their English text rather than to
+/// the row itself. SQLite reuses the ids of deleted rows, so neither can be
+/// keyed on an id across a replace.
+#[derive(Default)]
+struct CarriedTranslations {
+    /// Definition text to its translation.
+    definitions: HashMap<String, String>,
+    /// Examples JSON to the translations JSON beside it. Keyed on the whole
+    /// array, because the translations line up with it positionally: change
+    /// one example and the rest can no longer be matched up by index.
+    examples: HashMap<String, String>,
+}
+
 fn insert_definition_rows(
     conn: &Connection,
     vocab_id: i64,
     entries: &[VocabEntry],
-    carried_translations: &HashMap<String, String>,
+    carried: &CarriedTranslations,
 ) -> Result<(), String> {
     let mut stmt = conn
         .prepare(
             r#"
             INSERT INTO vocab_definitions (
                 vocab_id, entry_index, part_of_speech, pron_uk, pron_us,
-                guide_word, definition, definition_vi, examples, sort_order
+                guide_word, definition, definition_vi, examples, examples_vi,
+                sort_order
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             "#,
         )
         .map_err(|err| format!("Failed to prepare definition insert: {err}"))?;
@@ -596,11 +756,17 @@ fn insert_definition_rows(
             .map_err(|err| format!("Failed to encode examples: {err}"))?;
         // A translation belongs to the English text, not to the row: carrying
         // it over by text keeps it through a manager save or a re-fetch, and
-        // drops it when the definition itself changed.
-        let definition_vi = carried_translations
+        // drops it when the English itself changed.
+        let definition_vi = carried
+            .definitions
             .get(&row.definition)
             .cloned()
             .unwrap_or_default();
+        let examples_vi = carried
+            .examples
+            .get(&examples)
+            .cloned()
+            .unwrap_or_else(|| "[]".to_string());
 
         stmt.execute(params![
             vocab_id,
@@ -612,6 +778,7 @@ fn insert_definition_rows(
             row.definition,
             definition_vi,
             examples,
+            examples_vi,
             sort_order as i64
         ])
         .map_err(|err| format!("Failed to save definition: {err}"))?;
@@ -629,7 +796,7 @@ fn replace_word_definitions(
 ) -> Result<(), String> {
     // Read before the delete: the rows are about to be replaced, and their
     // translations only have to survive when their English text did.
-    let carried_translations = definition_translations_for(conn, vocab_id)?;
+    let carried = definition_translations_for(conn, vocab_id)?;
 
     conn.execute(
         "DELETE FROM vocab_definitions WHERE vocab_id = ?1",
@@ -637,32 +804,49 @@ fn replace_word_definitions(
     )
     .map_err(|err| format!("Failed to clear existing definitions: {err}"))?;
 
-    insert_definition_rows(conn, vocab_id, entries, &carried_translations)
+    insert_definition_rows(conn, vocab_id, entries, &carried)
 }
 
-/// Every stored Vietnamese definition of a word, keyed by its English text.
+/// Everything a word has had translated, keyed by the English text it belongs
+/// to: definitions by their own text, examples by their whole JSON array.
 fn definition_translations_for(
     conn: &Connection,
     vocab_id: i64,
-) -> Result<HashMap<String, String>, String> {
+) -> Result<CarriedTranslations, String> {
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT definition, definition_vi
+            SELECT definition, definition_vi, examples, examples_vi
             FROM vocab_definitions
-            WHERE vocab_id = ?1 AND definition_vi <> ''
+            WHERE vocab_id = ?1 AND (definition_vi <> '' OR examples_vi NOT IN ('', '[]'))
             "#,
         )
         .map_err(|err| format!("Failed to prepare translation query: {err}"))?;
 
     let rows = stmt
         .query_map(params![vocab_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
         })
         .map_err(|err| format!("Failed to read translations: {err}"))?;
 
-    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
-        .map_err(|err| format!("Failed to decode translations: {err}"))
+    let mut carried = CarriedTranslations::default();
+    for row in rows {
+        let (definition, definition_vi, examples, examples_vi) =
+            row.map_err(|err| format!("Failed to decode translations: {err}"))?;
+        if !definition_vi.is_empty() {
+            carried.definitions.insert(definition, definition_vi);
+        }
+        if !examples_vi.is_empty() && examples_vi != "[]" {
+            carried.examples.insert(examples, examples_vi);
+        }
+    }
+
+    Ok(carried)
 }
 
 /// The Vietnamese definition already stored for a row, if any.
@@ -678,6 +862,52 @@ fn stored_definition_vi(conn: &Connection, definition_id: i64) -> Result<Option<
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(err) => Err(format!("Failed to read the Vietnamese definition: {err}")),
     }
+}
+
+/// The stored translations of a definition's examples, but only when they
+/// still line up with the examples asked about: a row whose examples were
+/// edited keeps a stale array until the next resave clears it, and a count
+/// that does not match is not an answer.
+fn stored_examples_vi(
+    conn: &Connection,
+    definition_id: i64,
+    expected: usize,
+) -> Result<Option<Vec<String>>, String> {
+    let stored = conn.query_row(
+        "SELECT examples_vi FROM vocab_definitions WHERE id = ?1",
+        params![definition_id],
+        |row| row.get::<_, String>(0),
+    );
+
+    let encoded = match stored {
+        Ok(encoded) => encoded,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(err) => return Err(format!("Failed to read the Vietnamese examples: {err}")),
+    };
+
+    let examples_vi: Vec<String> = serde_json::from_str(&encoded).unwrap_or_default();
+    if examples_vi.len() != expected || examples_vi.iter().any(|text| text.is_empty()) {
+        return Ok(None);
+    }
+
+    Ok(Some(examples_vi))
+}
+
+fn store_examples_vi(
+    conn: &Connection,
+    definition_id: i64,
+    examples_vi: &[String],
+) -> Result<(), String> {
+    let encoded = serde_json::to_string(examples_vi)
+        .map_err(|err| format!("Failed to encode the Vietnamese examples: {err}"))?;
+
+    conn.execute(
+        "UPDATE vocab_definitions SET examples_vi = ?1 WHERE id = ?2",
+        params![encoded, definition_id],
+    )
+    .map_err(|err| format!("Failed to store the Vietnamese examples: {err}"))?;
+
+    Ok(())
 }
 
 fn store_definition_vi(
@@ -737,6 +967,7 @@ fn build_word(
     id: i64,
     word: String,
     source: String,
+    points: i64,
     created_at: String,
     updated_at: String,
     rows: Vec<DefinitionRow>,
@@ -749,6 +980,7 @@ fn build_word(
         source: WordSource::from_str(&source),
         definition_count: count_definitions(&entries),
         entries,
+        points,
         created_at,
         updated_at,
     }
@@ -788,7 +1020,7 @@ fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, word, source, created_at, updated_at
+            SELECT id, word, source, points, created_at, updated_at
             FROM vocabs
             ORDER BY lower(word) ASC
             "#,
@@ -801,21 +1033,23 @@ fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
+                row.get::<_, i64>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })
         .map_err(|err| format!("Failed to read vocabulary: {err}"))?;
 
     let mut words = Vec::new();
     for row in rows {
-        let (id, word, source, created_at, updated_at) =
+        let (id, word, source, points, created_at, updated_at) =
             row.map_err(|err| format!("Failed to decode vocabulary: {err}"))?;
         let definitions = definitions_by_word.remove(&id).unwrap_or_default();
         words.push(build_word(
             id,
             word,
             source,
+            points,
             created_at,
             updated_at,
             definitions,
@@ -828,28 +1062,29 @@ fn list_vocab_from_db(conn: &Connection) -> Result<Vec<VocabWord>, String> {
 fn get_vocab_by_id(conn: &Connection, id: i64) -> Result<Option<VocabWord>, String> {
     let header = conn
         .query_row(
-            "SELECT id, word, source, created_at, updated_at FROM vocabs WHERE id = ?1",
+            "SELECT id, word, source, points, created_at, updated_at FROM vocabs WHERE id = ?1",
             params![id],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
         .optional()
         .map_err(|err| format!("Failed to read vocabulary word: {err}"))?;
 
-    let Some((id, word, source, created_at, updated_at)) = header else {
+    let Some((id, word, source, points, created_at, updated_at)) = header else {
         return Ok(None);
     };
 
     let rows = definition_rows_for(conn, id)?;
     Ok(Some(build_word(
-        id, word, source, created_at, updated_at, rows,
+        id, word, source, points, created_at, updated_at, rows,
     )))
 }
 
@@ -908,6 +1143,74 @@ fn current_card(state: &AppState) -> Option<VocabCard> {
     cards.get(index).cloned()
 }
 
+/// The card on screen, in a form that survives the card list being rebuilt.
+fn current_card_ref(state: &AppState) -> Option<CardRef> {
+    let cards = state.cards.lock().unwrap();
+    let index = *state.current_index.lock().unwrap();
+    cards.get(index).map(CardRef::of)
+}
+
+/// Finds the card a history entry names, falling back to the word's first
+/// definition when that definition is gone — a re-fetch can shorten a word.
+/// A word that no longer exists resolves to nothing.
+fn resolve_card_ref(cards: &[VocabCard], target: CardRef) -> Option<usize> {
+    cards
+        .iter()
+        .position(|card| CardRef::of(card) == target)
+        .or_else(|| {
+            cards
+                .iter()
+                .position(|card| card.vocab_id == target.vocab_id)
+        })
+}
+
+/// Records a move that was not a walk through the history stacks — a shuffle,
+/// `Got it`, a word added — so ← returns to the word it left.
+///
+/// The word rotation drew while the popup was hidden is not one the user saw,
+/// so `hidden_from` is preferred over the card on screen when it is set.
+fn record_navigation(state: &AppState, target: usize) {
+    let (current, target_word) = {
+        let cards = state.cards.lock().unwrap();
+        let index = *state.current_index.lock().unwrap();
+        (
+            cards.get(index).map(CardRef::of),
+            cards.get(target).map(|card| card.vocab_id),
+        )
+    };
+
+    let Some(current) = current else {
+        return;
+    };
+    // The footer arrows cycle the definitions of a single word; a jump within
+    // the word is not word navigation and must not spend a back press on
+    // itself.
+    if target_word == Some(current.vocab_id) {
+        return;
+    }
+
+    let departed = state.hidden_from.lock().unwrap().take().unwrap_or(current);
+    state.history.lock().unwrap().record(departed);
+}
+
+/// Makes the history agree with a popup that has just reopened.
+///
+/// If rotation moved the card while the popup was hidden, the card it drew is
+/// not one the user saw. The word that was on screen before becomes the back
+/// entry for the new session, so ← returns to it instead of to the rotation
+/// word's alphabetical neighbour.
+fn begin_popup_session(state: &AppState) {
+    let Some(origin) = state.hidden_from.lock().unwrap().take() else {
+        return;
+    };
+
+    if current_card_ref(state) == Some(origin) {
+        return;
+    }
+
+    state.history.lock().unwrap().record(origin);
+}
+
 /// Moves the rotation to `index` and tells the popup and tray about it.
 fn apply_card_index(app: &tauri::AppHandle, state: &AppState, index: usize) -> Option<VocabCard> {
     let card = {
@@ -946,6 +1249,7 @@ fn update_tray_title(app: &tauri::AppHandle, word: &str) {
         let title = if word.is_empty() { None } else { Some(word) };
         let _ = tray.set_title(title);
     }
+    follow_tray_item(app);
 }
 
 #[cfg(target_os = "macos")]
@@ -1259,11 +1563,11 @@ fn step_vocab_card(
     apply_card_index(&app, &state, next)
 }
 
-/// Steps the rotation by one word, landing on the first definition of the word
-/// before or after the current one.
+/// Steps the popup back or forward one word.
 ///
-/// The popup's footer arrows move between words; the ‹ › stepper on the card's
-/// word line is what walks the definitions of one word (`step_vocab_card`).
+/// The footer's arrows walk the words the user actually saw first; see
+/// `step_word_index`. The ‹ › stepper on the card's word line is what walks the
+/// definitions of one word (`step_vocab_card`).
 #[tauri::command]
 fn step_vocab_word(
     state: tauri::State<AppState>,
@@ -1276,7 +1580,8 @@ fn step_vocab_word(
 
     let next = {
         let cards = state.cards.lock().unwrap();
-        word_step_index(&cards, current, direction)
+        let mut history = state.history.lock().unwrap();
+        step_word_index(&cards, current, direction, &mut history)
     }?;
 
     apply_card_index(&app, &state, next)
@@ -1325,20 +1630,197 @@ fn word_step_index(cards: &[VocabCard], current: usize, direction: i32) -> Optio
     Some(previous)
 }
 
-#[tauri::command]
-fn random_vocab_card(state: tauri::State<AppState>, app: tauri::AppHandle) -> Option<VocabCard> {
-    let len = state.cards.lock().unwrap().len();
-    if len == 0 {
+/// The footer's word step: the history first, list order once a stack runs out.
+///
+/// ← pops the word that was last left behind and → retraces what ← walked
+/// past, so a weighted draw can be undone instead of stepped over. Only when
+/// the stack in that direction is empty does the arrow fall back to
+/// `word_step_index` — that is what still reaches every word, and what wraps at
+/// both ends of the list.
+fn step_word_index(
+    cards: &[VocabCard],
+    current: usize,
+    direction: i32,
+    history: &mut NavigationHistory,
+) -> Option<usize> {
+    if cards.is_empty() {
         return None;
     }
 
-    // Cheap, dependency-free jitter: the clock is plenty for shuffling a popup.
-    let seed = std::time::SystemTime::now()
+    let current = current.min(cards.len() - 1);
+    let departed = CardRef::of(&cards[current]);
+    let back = direction < 0;
+
+    loop {
+        let target = if back {
+            history.take_back()
+        } else {
+            history.take_forward()
+        };
+
+        match target {
+            Some(target) => {
+                if let Some(index) = resolve_card_ref(cards, target) {
+                    history.after_move(departed, back);
+                    return Some(index);
+                }
+                // The word was deleted while it sat in the stack: drop the
+                // stale entry and keep looking.
+            }
+            None => break,
+        }
+    }
+
+    let index = word_step_index(cards, current, direction)?;
+    history.after_move(departed, back);
+    Some(index)
+}
+
+/// A word's share of the rotation draw. Points make a word rarer without ever
+/// silencing it: 0 points weighs 1, 1 point a half, 3 points a quarter. A word
+/// confirmed a dozen times still comes back round, which is the point of
+/// spacing it out rather than retiring it.
+fn draw_weight(points: i64) -> f64 {
+    1.0 / (points.max(0) as f64 + 1.0)
+}
+
+/// Picks one candidate in proportion to its weight. `roll` is in `[0, 1)` and
+/// is the only randomness here, which is what makes the draw a pure function
+/// the tests can pin down.
+fn weighted_pick(points: &[i64], roll: f64) -> Option<usize> {
+    if points.is_empty() {
+        return None;
+    }
+
+    let total: f64 = points.iter().copied().map(draw_weight).sum();
+    let mut target = roll.clamp(0.0, 1.0) * total;
+
+    for (index, &candidate) in points.iter().enumerate() {
+        target -= draw_weight(candidate);
+        if target < 0.0 {
+            return Some(index);
+        }
+    }
+
+    // Only reachable when rounding leaves a crumb at the very top of the range.
+    Some(points.len() - 1)
+}
+
+/// Cheap, dependency-free jitter in `[0, 1)`. The rotation draws at most once
+/// per interval and the shuffle button once per click, so the sub-second clock
+/// is spread enough to shuffle a popup — the reasoning the old modulo shuffle
+/// already rested on.
+fn clock_roll() -> f64 {
+    let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.subsec_nanos() as usize)
+        .map(|elapsed| elapsed.subsec_nanos())
         .unwrap_or(0);
 
-    apply_card_index(&app, &state, seed % len)
+    (nanos % 1_000_000) as f64 / 1_000_000.0
+}
+
+/// The rotation's next card: a word drawn by weight, landing on its first
+/// definition.
+///
+/// The draw is per word, not per definition, so a word with twenty definitions
+/// does not flood the rotation; the ‹ › stepper is still how the rest of a
+/// word's definitions are reached. The word on screen is left out while there
+/// is another to pick, so a tick always visibly moves.
+fn weighted_next_index(state: &AppState) -> Option<usize> {
+    // Locks are taken one at a time: nothing in this file ever holds `cards`
+    // and `current_index` together.
+    let current = *state.current_index.lock().unwrap();
+
+    let (word_starts, current_word) = {
+        let cards = state.cards.lock().unwrap();
+        if cards.is_empty() {
+            return None;
+        }
+
+        // `build_cards` puts a word's definitions next to each other, so a new
+        // `vocab_id` is the first card of a word.
+        let mut starts: Vec<(usize, i64)> = Vec::new();
+        let mut previous: Option<i64> = None;
+        for (index, card) in cards.iter().enumerate() {
+            if previous != Some(card.vocab_id) {
+                starts.push((index, card.vocab_id));
+                previous = Some(card.vocab_id);
+            }
+        }
+
+        (starts, cards.get(current).map(|card| card.vocab_id))
+    };
+
+    let points: HashMap<i64, i64> = {
+        let list = state.vocab_list.lock().unwrap();
+        list.iter().map(|word| (word.id, word.points)).collect()
+    };
+
+    let mut pool: Vec<(usize, i64)> = word_starts
+        .iter()
+        .copied()
+        .filter(|(_, vocab_id)| Some(*vocab_id) != current_word)
+        .collect();
+    if pool.is_empty() {
+        pool = word_starts;
+    }
+
+    let weights: Vec<i64> = pool
+        .iter()
+        .map(|(_, vocab_id)| points.get(vocab_id).copied().unwrap_or(0))
+        .collect();
+
+    weighted_pick(&weights, clock_roll()).map(|choice| pool[choice].0)
+}
+
+#[tauri::command]
+fn random_vocab_card(state: tauri::State<AppState>, app: tauri::AppHandle) -> Option<VocabCard> {
+    let next = weighted_next_index(&state)?;
+    record_navigation(&state, next);
+    apply_card_index(&app, &state, next)
+}
+
+/// Records that the word on screen was remembered, then draws the next one.
+///
+/// A point is not content: this leaves `updated_at` alone and does not kick off
+/// a backup, which copies the whole database. The button is made to be pressed
+/// in bursts, so the points ride to Dropbox with the next real change instead.
+#[tauri::command]
+fn award_vocab_point(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<Option<VocabCard>, String> {
+    let Some(card) = current_card(&state) else {
+        return Ok(None);
+    };
+
+    {
+        let conn = state.db.lock().unwrap();
+        conn.execute(
+            "UPDATE vocabs SET points = points + 1 WHERE id = ?1",
+            params![card.vocab_id],
+        )
+        .map_err(|err| format!("Failed to record the point: {err}"))?;
+    }
+
+    // The cached list is both what the draw weighs and what the manager shows,
+    // so it is bumped in place. Rebuilding it here would also rebuild the card
+    // list and move the rotation out from under the popup.
+    let list = {
+        let mut list = state.vocab_list.lock().unwrap();
+        if let Some(word) = list.iter_mut().find(|word| word.id == card.vocab_id) {
+            word.points += 1;
+        }
+        list.clone()
+    };
+    let _ = app.emit("vocab-list-changed", list);
+
+    let Some(next) = weighted_next_index(&state) else {
+        return Ok(None);
+    };
+
+    record_navigation(&state, next);
+    Ok(apply_card_index(&app, &state, next))
 }
 
 /// Jumps the rotation to the first definition of `id`.
@@ -1357,6 +1839,7 @@ fn set_current_vocab_id(
         return Err("Vocabulary word was not found".into());
     };
 
+    record_navigation(&state, index);
     apply_card_index(&app, &state, index);
     Ok(())
 }
@@ -1611,6 +2094,10 @@ struct WordPreview {
     /// The stored Vietnamese translation of the first definition, when there is
     /// one; only a saved word has any.
     definition_vi: Option<String>,
+    /// Lạc Việt's entry for the word, read the way the popup reads it but with
+    /// nothing to rank against: a preview has no translation, so the senses keep
+    /// Lạc Việt's own order and `ranked` is always false.
+    lac_viet: Option<vietnamese::LacVietMeaning>,
 }
 
 /// The meaning of a suggestion, for the pane beside the add-word list.
@@ -1620,6 +2107,10 @@ struct WordPreview {
 /// is fetched the way `add_vocab_word` fetches it, the installed dictionary
 /// first and Cambridge after, so the pane answers for the words Oxford lacks
 /// too. Nothing is written: a preview must not change the vocabulary.
+///
+/// Both halves come back together. Lạc Việt is asked whether or not the English
+/// sources answer, because for a word it knows and they do not it is the only
+/// thing that can say what the word means.
 ///
 /// Async and moved to a worker for the same reason as `lac_viet_meaning`: the
 /// dictionary bridge finishes its work on the main queue.
@@ -1637,30 +2128,47 @@ async fn preview_word(
         let conn = state.db.lock().unwrap();
         saved_word_preview(&conn, &word)?
     };
-    if let Some(preview) = saved {
-        return Ok(preview);
-    }
 
     let lookup = word.clone();
-    let fetched = tauri::async_runtime::spawn_blocking(move || dictionary::fetch_word(&lookup))
-        .await
-        .map_err(|err| format!("Dictionary task failed: {err}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut preview = match saved {
+            Some(preview) => preview,
+            None => match dictionary::fetch_word(&lookup) {
+                Ok(fetched) => preview_from_entries(
+                    lookup,
+                    fetched.entries,
+                    false,
+                    None,
+                    fetched.source.as_str(),
+                ),
+                // A word none of the sources carries is not an error here
+                // either: the pane says so, and adding it reports the failure
+                // in the field's own status line.
+                Err(_) => WordPreview {
+                    word: lookup,
+                    saved: false,
+                    source: "none".into(),
+                    definitions: Vec::new(),
+                    total: 0,
+                    definition_vi: None,
+                    lac_viet: None,
+                },
+            },
+        };
 
-    // A word none of the sources carries is not an error here either: the pane
-    // says so, and adding it reports the failure in the field's own status line.
-    Ok(match fetched {
-        Ok(fetched) => {
-            preview_from_entries(word, fetched.entries, false, None, fetched.source.as_str())
-        }
-        Err(_) => WordPreview {
-            word,
-            saved: false,
-            source: "none".into(),
-            definitions: Vec::new(),
-            total: 0,
-            definition_vi: None,
-        },
+        // The part of speech narrows Lạc Việt's entry to the senses that belong
+        // to it; a word the English sources missed has none to offer, and every
+        // group is shown instead of none.
+        let part_of_speech = preview
+            .definitions
+            .first()
+            .map(|definition| definition.part_of_speech.clone())
+            .unwrap_or_default();
+        preview.lac_viet = vietnamese::lac_viet_meaning(&preview.word, &part_of_speech, None);
+        preview
     })
+    .await
+    .map_err(|err| format!("Dictionary task failed: {err}"))
 }
 
 fn saved_word_preview(conn: &Connection, word: &str) -> Result<Option<WordPreview>, String> {
@@ -1728,6 +2236,8 @@ fn preview_from_entries(
         definitions,
         total: count_definitions(&entries),
         definition_vi,
+        // Filled in by `preview_word`, which is where the Lạc Việt bridge runs.
+        lac_viet: None,
     }
 }
 
@@ -1936,6 +2446,55 @@ async fn translate_definition(
 /// The word itself, for the popup to show under VI when Lạc Việt has no entry
 /// for it. Kept separate from `translate_definition` so a card whose meaning
 /// Lạc Việt does have never pays for a second translation.
+/// The card's examples in Vietnamese, stored with the definition they belong
+/// to so each one is translated once ever.
+///
+/// Unlike the definition this is lazy: it runs when the VI toggle is pressed,
+/// not when the card appears. The definition is translated eagerly because it
+/// orders the Lạc Việt senses; the examples order nothing, and the rotation
+/// would otherwise translate examples nobody has asked to read.
+///
+/// The whole list goes through one translator session rather than one per
+/// example — see `vietnamese::translate_texts`.
+#[tauri::command]
+async fn translate_examples(
+    state: tauri::State<'_, AppState>,
+    examples: Vec<String>,
+    definition_id: Option<i64>,
+) -> Result<Vec<String>, String> {
+    if examples.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if let Some(id) = definition_id {
+        let stored = {
+            let conn = state.db.lock().unwrap();
+            stored_examples_vi(&conn, id, examples.len())?
+        };
+        if let Some(stored) = stored {
+            return Ok(stored);
+        }
+    }
+
+    let state = state.inner().clone();
+    let translated = {
+        let examples = examples.clone();
+        tauri::async_runtime::spawn_blocking(move || vietnamese::translate_texts(&examples))
+            .await
+            .map_err(|err| format!("Translation task failed: {err}"))??
+    };
+
+    // A partial result is not worth storing: the next press should try the
+    // ones that failed again rather than read back a gap.
+    let complete = translated.iter().all(|text| !text.is_empty());
+    if let (Some(id), true) = (definition_id, complete) {
+        let conn = state.db.lock().unwrap();
+        store_examples_vi(&conn, id, &translated)?;
+    }
+
+    Ok(translated)
+}
+
 #[tauri::command]
 async fn translate_word(word: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || vietnamese::translate_text(&word))
@@ -1946,6 +2505,7 @@ async fn translate_word(word: String) -> Result<String, String> {
 #[tauri::command]
 fn show_main_window(app: tauri::AppHandle, state: tauri::State<AppState>) {
     *state.is_window_visible.lock().unwrap() = true;
+    begin_popup_session(&state);
     if let Some(window) = app.get_webview_window("main") {
         // Shown from the frontend after a word was added, so there is no click
         // on the menu bar item to line the popup up with: the item's own frame
@@ -2022,6 +2582,52 @@ fn hide_quick_add_window(app: tauri::AppHandle) {
     }
 }
 
+/// Remembers the word highlighted in the application in front of Mavoca, so the
+/// window the shortcut is about to open can start on it. Called before that
+/// window takes focus: once it has, the frontmost application is ours and the
+/// selection is gone.
+fn recall_selected_word(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    *state.pending_selection.lock().unwrap() = selection::selected_word();
+}
+
+/// The forgotten word, taken once: the window is shown again and again, and only
+/// the opening that follows a press of the shortcut has a selection behind it.
+#[tauri::command]
+fn take_pending_selection(state: tauri::State<'_, AppState>) -> Option<String> {
+    state.pending_selection.lock().unwrap().take()
+}
+
+/// Whether Mavoca may read the word selected in another application.
+///
+/// The add-word window asks on every opening rather than once, so granting the
+/// permission makes the warning go away by itself.
+#[tauri::command]
+fn accessibility_trusted() -> bool {
+    selection::accessibility_trusted()
+}
+
+/// Opens System Settings at the Accessibility list, which is the only thing that
+/// helps in either case: the app was never granted the permission, or it was
+/// granted to an earlier build and the stale entry has to be removed with `-`
+/// before it can be added again. macOS shows no prompt of its own in the second
+/// case, so there is nowhere else to send the user.
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        const ACCESSIBILITY_PANE: &str =
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+        std::process::Command::new("open")
+            .arg(ACCESSIBILITY_PANE)
+            .spawn()
+            .map_err(|error| format!("Failed to open System Settings: {error}"))?;
+    }
+    Ok(())
+}
+
 /// Grows the quick-add window while it shows a suggestion list or a meaning, and
 /// shrinks it back afterwards. The field sits at a fixed offset from the top left
 /// of the window, so only the list and the pane gain room and nothing on screen
@@ -2034,9 +2640,22 @@ fn resize_quick_add_window(app: tauri::AppHandle, width: f64, height: f64) -> Re
 
     // The frontend measures its own content, which can be the meaning pane as
     // well as the list; the clamps only stop a bad measurement from escaping the
-    // screen.
+    // screen. The window grows down from where it was opened, so the room left
+    // below its top edge is the real ceiling: a short screen keeps the last
+    // lines of a long entry visible where a fixed 560 would push them off it.
+    let mut max_height = QUICK_ADD_MAX_HEIGHT;
+    if let (Ok(Some(monitor)), Ok(position)) = (window.current_monitor(), window.outer_position()) {
+        let scale_factor = monitor.scale_factor();
+        let screen_bottom =
+            (monitor.position().y as f64 + monitor.size().height as f64) / scale_factor;
+        let room = screen_bottom - position.y as f64 / scale_factor - QUICK_ADD_SCREEN_MARGIN;
+        max_height = max_height.min(room);
+    }
+
     let width = width.clamp(QUICK_ADD_WIDTH, QUICK_ADD_MAX_WIDTH);
-    let height = height.clamp(QUICK_ADD_HEIGHT, QUICK_ADD_MAX_HEIGHT);
+    let height = height
+        .max(QUICK_ADD_HEIGHT)
+        .min(max_height.max(QUICK_ADD_HEIGHT));
     window
         .set_size(tauri::LogicalSize::new(width, height))
         .map_err(|err| format!("Failed to resize the add word window: {err}"))
@@ -2155,6 +2774,38 @@ fn position_popup_under_tray(window: &tauri::WebviewWindow) -> bool {
     position_popup_at_click(window, center_x * scale_factor, top * scale_factor).is_ok()
 }
 
+/// Keeps an open popup under the menu bar item after the title changed.
+///
+/// The title is the current word, so the item is exactly as wide as that word
+/// and its centre moves with it: stepping from `amenity` to `mellifluous` walks
+/// the popup's anchor left, and a popup left where the previous word put it sits
+/// visibly off its own menu bar item. Nothing else moves it — the popup is only
+/// anchored when it is shown — so the title change is what re-anchors it.
+#[cfg(target_os = "macos")]
+fn follow_tray_item(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    // A hidden popup is anchored again when it is shown, and the rotation keeps
+    // changing the title behind the user's back.
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+
+    let app = app.clone();
+    // Posted rather than run inline: this can be called from the rotation
+    // thread, and the item's frame is only readable on the main thread. Posting
+    // also lets the item lay itself out at the new title's width first.
+    let _ = app.clone().run_on_main_thread(move || {
+        if let Some(window) = app.get_webview_window("main") {
+            position_popup_under_tray(&window);
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn follow_tray_item(_app: &tauri::AppHandle) {}
+
 fn position_popup_at_click(
     window: &tauri::WebviewWindow,
     click_x: f64,
@@ -2215,13 +2866,22 @@ fn start_auto_rotation(app: tauri::AppHandle, state: AppState) {
             }
             hidden_for = Duration::ZERO;
 
-            let len = state.cards.lock().unwrap().len();
-            if len == 0 {
+            let Some(index) = weighted_next_index(&state) else {
                 continue;
+            };
+
+            // A rotation tick is not browsing, so it does not fill the history.
+            // The card it is about to leave is parked instead: opening the
+            // popup turns it into the back entry, which is how ← returns to
+            // the word that was on screen when the popup closed.
+            if let Some(origin) = current_card_ref(&state) {
+                let mut hidden_from = state.hidden_from.lock().unwrap();
+                if hidden_from.is_none() {
+                    *hidden_from = Some(origin);
+                }
             }
 
-            let index = *state.current_index.lock().unwrap();
-            apply_card_index(&app, &state, (index + 1) % len);
+            apply_card_index(&app, &state, index);
         }
     });
 }
@@ -2271,6 +2931,7 @@ pub fn run() {
                 .with_handler(|app, _shortcut, event| {
                     // Only one shortcut is ever registered, so any press is it.
                     if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        recall_selected_word(app);
                         show_quick_add_window(app);
                     }
                 })
@@ -2279,6 +2940,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             show_main_window,
             hide_quick_add_window,
+            take_pending_selection,
+            accessibility_trusted,
+            open_accessibility_settings,
             hide_main_window,
             resize_popup,
             show_manager_window,
@@ -2288,6 +2952,7 @@ pub fn run() {
             step_vocab_card,
             step_vocab_word,
             random_vocab_card,
+            award_vocab_point,
             set_current_vocab_id,
             get_settings,
             update_settings,
@@ -2300,6 +2965,7 @@ pub fn run() {
             resize_quick_add_window,
             lac_viet_meaning,
             translate_definition,
+            translate_examples,
             translate_word,
             create_vocab,
             update_vocab,
@@ -2328,8 +2994,11 @@ pub fn run() {
                 vocab_list: Arc::new(Mutex::new(initial_vocab)),
                 cards: Arc::new(Mutex::new(initial_cards)),
                 current_index: Arc::new(Mutex::new(0)),
+                history: Arc::new(Mutex::new(NavigationHistory::default())),
+                hidden_from: Arc::new(Mutex::new(None)),
                 is_window_visible: Arc::new(Mutex::new(false)),
                 rotation_interval_secs: Arc::new(AtomicU64::new(rotation_interval_secs)),
+                pending_selection: Arc::new(Mutex::new(None)),
             };
 
             if let Some(card) = current_card(&app_state) {
@@ -2478,6 +3147,7 @@ pub fn run() {
                             let _ = window.hide();
                         } else {
                             *state.is_window_visible.lock().unwrap() = true;
+                            begin_popup_session(&state);
                             #[cfg(target_os = "macos")]
                             let placed = position_popup_under_tray(&window);
                             #[cfg(not(target_os = "macos"))]
@@ -2744,16 +3414,23 @@ mod tests {
             "#,
         )
         .expect("old schema");
-        assert!(!table_columns(&conn, "vocab_definitions")
-            .expect("columns")
-            .iter()
-            .any(|column| column == "definition_vi"));
+        for column in ["definition_vi", "examples_vi"] {
+            assert!(!table_columns(&conn, "vocab_definitions")
+                .expect("columns")
+                .iter()
+                .any(|existing| existing == column));
+        }
 
         create_schema(&conn).expect("schema");
-        assert!(table_columns(&conn, "vocab_definitions")
-            .expect("columns")
-            .iter()
-            .any(|column| column == "definition_vi"));
+        for column in ["definition_vi", "examples_vi"] {
+            assert!(
+                table_columns(&conn, "vocab_definitions")
+                    .expect("columns")
+                    .iter()
+                    .any(|existing| existing == column),
+                "{column} was not added"
+            );
+        }
 
         // Idempotent: the app opens the same database on every launch.
         create_schema(&conn).expect("schema again");
@@ -2935,6 +3612,142 @@ mod tests {
         assert_eq!(saved.source, WordSource::Manual);
     }
 
+    /// Translated examples are carried the same way translated definitions
+    /// are, but keyed on the whole list: they line up with it positionally, so
+    /// editing one example invalidates all of them.
+    #[test]
+    fn keeps_translated_examples_only_while_the_examples_match() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+
+        let id = save_word_tree(&conn, None, "run", WordSource::Cambridge, &sample_entries())
+            .expect("save");
+        let definition_id = definition_id_for(&conn, id, "to move using your legs");
+        let examples = ["Tôi chạy mỗi sáng.".to_string()];
+        store_examples_vi(&conn, definition_id, &examples).expect("store");
+        assert_eq!(
+            stored_examples_vi(&conn, definition_id, 1).expect("read"),
+            Some(examples.to_vec())
+        );
+        // Asking for a different number of examples than were stored is not
+        // an answer, however many are in the row.
+        assert_eq!(
+            stored_examples_vi(&conn, definition_id, 2).expect("read"),
+            None
+        );
+
+        // An unchanged tree keeps them through the replace.
+        save_word_tree(
+            &conn,
+            Some(id),
+            "run",
+            WordSource::Cambridge,
+            &sample_entries(),
+        )
+        .expect("resave");
+        assert_eq!(
+            stored_examples_vi(
+                &conn,
+                definition_id_for(&conn, id, "to move using your legs"),
+                1
+            )
+            .expect("read"),
+            Some(examples.to_vec())
+        );
+
+        // Editing the example list drops them: the translations are positional
+        // and no longer line up with anything.
+        let mut edited = sample_entries();
+        edited[0].sense_groups[0].definitions[0]
+            .examples
+            .push("She runs to work.".into());
+        save_word_tree(&conn, Some(id), "run", WordSource::Cambridge, &edited).expect("edit");
+        assert_eq!(
+            stored_examples_vi(
+                &conn,
+                definition_id_for(&conn, id, "to move using your legs"),
+                2
+            )
+            .expect("read"),
+            None
+        );
+    }
+
+    /// The column arrived after the first databases were created. Unlike the
+    /// Vietnamese one it is added after the legacy migration, which rebuilds
+    /// `vocabs` from scratch — so this checks it survives that order.
+    #[test]
+    fn adds_the_points_column_to_an_older_database() {
+        let conn = legacy_database();
+        create_schema(&conn).expect("schema");
+        migrate_legacy_vocabs(&conn).expect("migration");
+        ensure_points_column(&conn).expect("points column");
+        // Launch runs it every time, and it must not fail on the second.
+        ensure_points_column(&conn).expect("points column again");
+
+        let words = list_vocab_from_db(&conn).expect("list");
+        assert_eq!(words.len(), 2);
+        // The words came through the rebuild, each starting from zero.
+        assert_eq!(words[0].word, "ephemeral");
+        assert!(words.iter().all(|word| word.points == 0));
+    }
+
+    /// A point belongs to the word, not to its definitions, so re-fetching or
+    /// hand-editing the tree — both of which replace every definition row —
+    /// must leave the score alone.
+    #[test]
+    fn points_survive_a_resave_of_the_tree() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        create_schema(&conn).expect("schema");
+
+        let id = save_word_tree(&conn, None, "run", WordSource::Cambridge, &sample_entries())
+            .expect("save");
+        conn.execute("UPDATE vocabs SET points = 4 WHERE id = ?1", params![id])
+            .expect("award");
+
+        save_word_tree(
+            &conn,
+            Some(id),
+            "run",
+            WordSource::Manual,
+            &sample_entries(),
+        )
+        .expect("resave");
+
+        assert_eq!(
+            get_vocab_by_id(&conn, id)
+                .expect("read")
+                .expect("word")
+                .points,
+            4
+        );
+    }
+
+    /// The draw is what makes the button worth pressing: a word you keep
+    /// confirming has to fall back behind the ones you have not.
+    #[test]
+    fn the_draw_favours_the_words_with_the_fewest_points() {
+        // Weights are 1, 1/2, 1/4 — a total of 1.75, so the first word owns
+        // the bottom 4/7 of the range, the second the next 2/7.
+        let points = [0, 1, 3];
+        assert_eq!(weighted_pick(&points, 0.0), Some(0));
+        assert_eq!(weighted_pick(&points, 0.5), Some(0));
+        assert_eq!(weighted_pick(&points, 0.6), Some(1));
+        assert_eq!(weighted_pick(&points, 0.85), Some(1));
+        assert_eq!(weighted_pick(&points, 0.9), Some(2));
+        // Rounding at the very top of the range still lands on a candidate.
+        assert_eq!(weighted_pick(&points, 1.0), Some(2));
+
+        // A mastered word is rarer, never silent.
+        assert!(draw_weight(50) > 0.0);
+        assert!(draw_weight(0) > draw_weight(1));
+        // A score can only ever have been incremented, but the weight must not
+        // blow up if one somehow goes negative.
+        assert_eq!(draw_weight(-3), draw_weight(0));
+
+        assert_eq!(weighted_pick(&[], 0.5), None);
+    }
+
     /// Deleting a word must take its definitions with it, which only happens
     /// when the foreign_keys pragma is on.
     #[test]
@@ -2961,14 +3774,7 @@ mod tests {
     /// current word's definitions instead of walking into the next one.
     #[test]
     fn a_word_step_lands_on_the_next_word() {
-        let cards = vec![
-            card(1, "apple", 1, 1),
-            card(2, "run", 1, 3),
-            card(2, "run", 2, 3),
-            card(2, "run", 3, 3),
-            card(3, "walk", 1, 2),
-            card(3, "walk", 2, 2),
-        ];
+        let cards = words();
 
         // Forward from anywhere in a word lands on the first card of the next.
         assert_eq!(word_step_index(&cards, 0, 1), Some(1));
@@ -2989,6 +3795,94 @@ mod tests {
         assert_eq!(word_step_index(&cards, 0, -1), Some(4));
 
         assert_eq!(word_step_index(&[], 0, 1), None);
+    }
+
+    /// ← returns to the word that was actually left, not to the word that
+    /// happens to precede it in the list; → retraces the step.
+    #[test]
+    fn the_footer_arrows_walk_the_words_that_were_seen() {
+        let cards = words();
+        let mut history = NavigationHistory::default();
+
+        // A shuffle from apple lands on walk and records apple.
+        history.record(CardRef::of(&cards[0]));
+
+        assert_eq!(step_word_index(&cards, 4, -1, &mut history), Some(0));
+        assert_eq!(step_word_index(&cards, 0, 1, &mut history), Some(4));
+    }
+
+    /// With no history in that direction a footer step keeps the list-order
+    /// walk, and remembers the word it left so the other arrow can return.
+    #[test]
+    fn a_footer_step_without_history_falls_back_to_the_list() {
+        let cards = words();
+        let mut history = NavigationHistory::default();
+
+        // Back from the first word wraps to the start of the last one...
+        assert_eq!(step_word_index(&cards, 0, -1, &mut history), Some(4));
+        // ...forward returns there, and then continues in list order.
+        assert_eq!(step_word_index(&cards, 4, 1, &mut history), Some(0));
+        assert_eq!(step_word_index(&cards, 0, 1, &mut history), Some(1));
+    }
+
+    /// A vocabulary change rebuilds the card list, so a history entry can name
+    /// a word that has since been deleted. It is dropped rather than landing on
+    /// whatever card now sits at its old position.
+    #[test]
+    fn history_skips_words_that_are_gone() {
+        let cards = words();
+        let mut history = NavigationHistory::default();
+        history.record(CardRef::of(&cards[0]));
+        history.record(CardRef {
+            vocab_id: 99,
+            position: 1,
+        });
+
+        assert_eq!(step_word_index(&cards, 4, -1, &mut history), Some(0));
+    }
+
+    /// A re-fetch can renumber a word's definitions. The entry then lands on
+    /// the word's first definition rather than failing to resolve.
+    #[test]
+    fn history_lands_on_the_first_definition_when_the_old_one_is_gone() {
+        let cards = words();
+        let target = CardRef {
+            vocab_id: 3,
+            position: 9,
+        };
+
+        assert_eq!(resolve_card_ref(&cards, target), Some(4));
+    }
+
+    #[test]
+    fn history_keeps_only_the_most_recent_words() {
+        let mut history = NavigationHistory::default();
+        for id in 0..(HISTORY_LIMIT as i64 + 5) {
+            history.record(CardRef {
+                vocab_id: id,
+                position: 1,
+            });
+        }
+
+        assert_eq!(history.back.len(), HISTORY_LIMIT);
+        assert_eq!(
+            history.take_back(),
+            Some(CardRef {
+                vocab_id: HISTORY_LIMIT as i64 + 4,
+                position: 1,
+            })
+        );
+    }
+
+    fn words() -> Vec<VocabCard> {
+        vec![
+            card(1, "apple", 1, 1),
+            card(2, "run", 1, 3),
+            card(2, "run", 2, 3),
+            card(2, "run", 3, 3),
+            card(3, "walk", 1, 2),
+            card(3, "walk", 2, 2),
+        ]
     }
 
     fn card(vocab_id: i64, word: &str, position: usize, total: usize) -> VocabCard {

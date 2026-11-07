@@ -9,10 +9,16 @@ fn main() {
         // src/macos_dictionary.rs.
         println!("cargo:rerun-if-changed=native/dictionary_services.c");
         println!("cargo:rerun-if-changed=native/dictionary_services.h");
+        println!("cargo:rerun-if-changed=native/selection.c");
+        println!("cargo:rerun-if-changed=native/selection.h");
         cc::Build::new()
             .file("native/dictionary_services.c")
+            .file("native/selection.c")
             .compile("mavoca_dictionary_services");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
+        // The Accessibility calls that read the selected word; see
+        // src/selection.rs.
+        println!("cargo:rustc-link-lib=framework=ApplicationServices");
     }
 
     tauri_build::build()

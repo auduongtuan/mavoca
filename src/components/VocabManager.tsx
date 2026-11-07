@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
+import { Check } from '@phosphor-icons/react';
 import { VocabEntry, VocabTreeInput, VocabWord, WordSource } from '../types';
 import { VocabTreeEditor, createEmptyEntries } from './VocabTreeEditor';
 import { ConfirmDialog } from './ui/ConfirmDialog';
@@ -206,6 +207,15 @@ export const VocabManager: React.FC = () => {
                     onClick={() => setSelectedId(word.id)}
                   >
                     <span>{word.word}</span>
+                    {/* The score the popup's "Got it" button feeds. A word at
+                        zero is one the rotation will keep bringing back. */}
+                    <small
+                      className={word.points > 0 ? 'word-points scored' : 'word-points'}
+                      title={`Remembered ${word.points} time${word.points === 1 ? '' : 's'}`}
+                    >
+                      <Check size={10} weight="bold" aria-hidden />
+                      {word.points}
+                    </small>
                     <small>
                       {word.definitionCount} def{word.definitionCount === 1 ? '' : 's'}
                     </small>
